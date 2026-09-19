@@ -1,13 +1,4 @@
-import { test, expect } from '@playwright/test';
-
-test.beforeEach(async ({ page }) => {
-  await page.goto('/access');
-  await page
-    .getByLabel('Workspace password')
-    .fill('test-only-loopend-password');
-  await page.getByRole('button', { name: 'Enter your space' }).click();
-  await expect(page).toHaveURL(/\/app$/);
-});
+import { test, expect } from './fixtures';
 
 test('a real Loop persists through edits, activity, verification, and closure', async ({
   page,

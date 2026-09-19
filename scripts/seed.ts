@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import * as schema from '../src/server/db/schema';
 import { loopService } from '../src/server/loops/service';
 
@@ -9,7 +9,10 @@ if (process.env.NODE_ENV === 'production')
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
 const client = postgres(process.env.DATABASE_URL, { max: 1 });
 const db = drizzle(client, { schema });
-const service = loopService(db);
+const userId = process.argv[2];
+if (!userId)
+  throw new Error('Create an account, then run pnpm db:seed <user-id>.');
+const service = loopService(db, userId);
 const future = (days: number) =>
   new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
 const seeds = [
@@ -79,11 +82,21 @@ const seeds = [
   },
 ] as const;
 try {
+  const [owner] = await db
+    .select({ id: schema.user.id })
+    .from(schema.user)
+    .where(eq(schema.user.id, userId));
+  if (!owner) throw new Error('Seed owner must be an existing account.');
   for (const seed of seeds) {
     const existing = await db
       .select({ id: schema.loops.id })
       .from(schema.loops)
-      .where(eq(schema.loops.title, seed.title))
+      .where(
+        and(
+          eq(schema.loops.userId, userId),
+          eq(schema.loops.title, seed.title),
+        ),
+      )
       .limit(1);
     if (existing.length) continue;
     const loop = await service.create(seed);

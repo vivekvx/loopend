@@ -33,11 +33,13 @@ export default async function ScanPage({
 }: {
   searchParams: Promise<{ notice?: string }>;
 }) {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   const { notice } = await searchParams;
   const setup = scanSetup();
-  const { connections, candidates, evidence } =
-    await scanStore(getDb()).review();
+  const { connections, candidates, evidence } = await scanStore(
+    getDb(),
+    user.id,
+  ).review();
   const connected = connections.filter(
     (connection) => connection.status !== 'DISCONNECTED',
   );

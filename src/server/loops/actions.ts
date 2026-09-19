@@ -23,10 +23,11 @@ export async function createLoop(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   let id: string;
   try {
-    id = (await loopService(getDb()).create(Object.fromEntries(form))).id;
+    id = (await loopService(getDb(), user.id).create(Object.fromEntries(form)))
+      .id;
   } catch (error) {
     return errorState(error);
   }
@@ -37,12 +38,12 @@ export async function updateLoop(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   let id: string;
   try {
     const input = identity.parse(Object.fromEntries(form));
     id = input.id;
-    await loopService(getDb()).update(
+    await loopService(getDb(), user.id).update(
       id,
       input.version,
       Object.fromEntries(form),
@@ -58,10 +59,14 @@ export async function addActivity(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   try {
     const { id, version } = identity.parse(Object.fromEntries(form));
-    await loopService(getDb()).addActivity(id, version, form.get('body'));
+    await loopService(getDb(), user.id).addActivity(
+      id,
+      version,
+      form.get('body'),
+    );
     revalidatePath('/app');
     revalidatePath(`/app/loops/${id}`);
   } catch (error) {
@@ -73,10 +78,10 @@ export async function completeLoop(
   _state: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   try {
     const { id, version } = identity.parse(Object.fromEntries(form));
-    await loopService(getDb()).complete(id, version, {
+    await loopService(getDb(), user.id).complete(id, version, {
       evidence: form.get('evidence'),
       confirmed: form.get('confirmed') === 'on',
     });

@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { test, expect } from './fixtures';
+import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -13,28 +13,14 @@ import { normalizeGmail } from '../../src/server/integrations/gmail/normalize';
 import { tokenVault } from '../../src/server/integrations/crypto';
 import { loopScanService } from '../../src/server/scan/service';
 import { gmailFixture, candidateFixture } from '../fixtures/scan';
+import { registerTestAccount } from '../fixtures/auth';
+import { loopService } from '../../src/server/loops/service';
 
-test.beforeEach(async ({ context }) => {
-  // Auth is separately exercised through the real login UI in access.spec.ts.
-  const expires = String(Date.now() + 60 * 60_000);
-  const signature = createHmac(
-    'sha256',
-    'test-only-loopend-session-secret-not-for-deployment',
-  )
-    .update(`${expires}:test-only-loopend-password`)
-    .digest('hex');
-  await context.addCookies([
-    {
-      name: 'loopend_session',
-      value: `${expires}.${signature}`,
-      url: 'http://127.0.0.1:3100',
-      httpOnly: true,
-      secure: true,
-      sameSite: 'Lax',
-    },
-  ]);
-});
-async function seedSuggestion(title: string, keepConnected = false) {
+async function seedSuggestion(
+  userId: string,
+  title: string,
+  keepConnected = false,
+) {
   const url = process.env.TEST_DATABASE_URL;
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
@@ -44,6 +30,7 @@ async function seedSuggestion(title: string, keepConnected = false) {
     const key = randomBytes(32).toString('base64');
     const id = await saveConnection(
       db,
+      userId,
       `${randomUUID()}@example.com`,
       {
         accessToken: 'fixture-only',
@@ -52,7 +39,7 @@ async function seedSuggestion(title: string, keepConnected = false) {
       },
       tokenVault(key),
     );
-    await loopScanService(db, {
+    await loopScanService(db, userId, {
       encryptionKey: key,
       source: {
         recent: async () => ({
@@ -71,7 +58,7 @@ async function seedSuggestion(title: string, keepConnected = false) {
       .select()
       .from(schema.loopCandidates)
       .where(eq(schema.loopCandidates.connectionId, id));
-    if (!keepConnected) await detachConnection(db, id);
+    if (!keepConnected) await detachConnection(db, userId, id);
     return candidate;
   } finally {
     await client.end();
@@ -109,16 +96,18 @@ test('Loop Scan has a clear configuration state and does not break manual Loops'
   expect(errors).toEqual([]);
 });
 
-test('disconnect erases local tokens and keeps revocation failure guidance visible', async ({
+test('settings disconnect erases local tokens and keeps revocation failure guidance visible', async ({
   page,
+  identity,
 }) => {
   const candidate = await seedSuggestion(
+    identity.id,
     `Disconnect review ${Date.now()}`,
     true,
   );
-  await page.goto('/app/scan');
+  await page.goto('/app/settings');
   const connection = page
-    .locator('.scan-connection')
+    .locator('.settings-connection')
     .filter({ has: page.locator(`input[value="${candidate.connectionId}"]`) });
   await connection.getByText('Disconnect Gmail', { exact: true }).click();
   await connection
@@ -152,8 +141,10 @@ test('disconnect erases local tokens and keeps revocation failure guidance visib
 
 test('source evidence is inspectable and Track this creates a provenance-linked Loop', async ({
   page,
+  identity,
 }, testInfo) => {
   const candidate = await seedSuggestion(
+    identity.id,
     `A refund to review ${testInfo.project.name} ${Date.now()}`,
   );
   await page.goto('/app/scan');
@@ -196,8 +187,10 @@ test('source evidence is inspectable and Track this creates a provenance-linked 
 
 test('Ignore persists across reload and forged callbacks do not connect an account', async ({
   page,
+  identity,
 }) => {
   const candidate = await seedSuggestion(
+    identity.id,
     `Ignore this suggestion ${Date.now()}`,
   );
   await page.goto('/app/scan');
@@ -215,4 +208,65 @@ test('Ignore persists across reload and forged callbacks do not connect an accou
   await expect(
     page.getByText('Gmail could not be connected.', { exact: false }),
   ).toBeVisible();
+});
+
+test('another account’s Loop and candidate stay private, including a tampered Server Action', async ({
+  page,
+  identity,
+}) => {
+  const other = await registerTestAccount();
+  const candidate = await seedSuggestion(
+    other.id,
+    `Private candidate ${randomUUID()}`,
+  );
+  const url = process.env.TEST_DATABASE_URL;
+  assert.ok(url);
+  assert.notEqual(url, process.env.DATABASE_URL);
+  const client = postgres(url, { max: 1 });
+  const db = drizzle(client, { schema });
+  try {
+    const input = {
+      title: 'A private application',
+      summary: '',
+      desiredOutcome: 'A decision arrives in writing.',
+      status: 'OPEN',
+      waitingOn: 'Admissions',
+      expectedBy: '',
+      nextAction: '',
+      verificationCondition: 'The decision letter arrives.',
+    };
+    const mine = await loopService(db, identity.id).create(input);
+    const theirs = await loopService(db, other.id).create({
+      ...input,
+      title: 'Someone else’s application',
+    });
+    await page.goto('/app/scan');
+    await expect(
+      page.getByRole('heading', { name: candidate.title }),
+    ).toHaveCount(0);
+    await page.goto(`/app/loops/${theirs.id}`);
+    await expect(
+      page.getByRole('heading', { name: 'This page isn’t here.' }),
+    ).toBeVisible();
+    await page.goto(`/app/loops/${mine.id}/edit`);
+    // Tamper at the request boundary; hydration may restore controlled hidden inputs.
+    let tampered = false;
+    await page.route(`**/app/loops/${mine.id}/edit`, async (route) => {
+      if (route.request().method() !== 'POST') return route.continue();
+      const body = route.request().postData() ?? '';
+      expect(body).toContain(mine.id);
+      tampered = true;
+      await route.continue({ postData: body.replaceAll(mine.id, theirs.id) });
+    });
+    await page.getByRole('button', { name: 'Save changes' }).click();
+    await expect(page.locator('.loop-form .form-error')).toContainText(
+      'could not be found',
+    );
+    expect(tampered).toBe(true);
+    expect((await loopService(db, other.id).get(theirs.id))?.loop.version).toBe(
+      1,
+    );
+  } finally {
+    await client.end();
+  }
 });

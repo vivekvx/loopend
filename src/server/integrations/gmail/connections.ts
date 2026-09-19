@@ -1,4 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
+import { assertUserId } from '../../../domain/ownership';
+import { ScanError } from '../../../domain/scan';
 import type { LoopDatabase } from '../../loops/service';
 import { sourceConnections } from '../../db/schema';
 import { tokenVault } from '../crypto';
@@ -6,16 +8,19 @@ import { GMAIL_SCOPE, type GoogleTokens } from './client';
 
 export async function saveConnection(
   db: LoopDatabase,
+  userId: string,
   email: string,
   tokens: GoogleTokens,
   vault: ReturnType<typeof tokenVault>,
 ) {
+  assertUserId(userId);
   const now = new Date();
   const encrypted = vault.seal(tokens, `gmail:${email}`);
   const [connection] = await db
     .insert(sourceConnections)
     .values({
       provider: 'gmail',
+      userId,
       accountId: email,
       accountEmail: email,
       tokenCiphertext: encrypted,
@@ -23,6 +28,7 @@ export async function saveConnection(
     })
     .onConflictDoUpdate({
       target: [sourceConnections.provider, sourceConnections.accountId],
+      setWhere: eq(sourceConnections.userId, userId),
       set: {
         tokenCiphertext: encrypted,
         status: 'CONNECTED',
@@ -35,16 +41,24 @@ export async function saveConnection(
       },
     })
     .returning({ id: sourceConnections.id });
+  if (!connection) throw new ScanError('GMAIL_AUTH');
   return connection.id;
 }
-export async function detachConnection(db: LoopDatabase, id: string) {
+export async function detachConnection(
+  db: LoopDatabase,
+  userId: string,
+  id: string,
+) {
+  assertUserId(userId);
   return db.transaction(async (tx) => {
     const [connection] = await tx
       .select()
       .from(sourceConnections)
-      .where(eq(sourceConnections.id, id))
+      .where(
+        and(eq(sourceConnections.id, id), eq(sourceConnections.userId, userId)),
+      )
       .for('update');
-    if (!connection) return null;
+    if (!connection) throw new ScanError('DISCONNECTED');
     await tx
       .update(sourceConnections)
       .set({
@@ -56,7 +70,9 @@ export async function detachConnection(db: LoopDatabase, id: string) {
         scanLeaseUntil: null,
         lastScanError: null,
       })
-      .where(eq(sourceConnections.id, id));
+      .where(
+        and(eq(sourceConnections.id, id), eq(sourceConnections.userId, userId)),
+      );
     return connection;
   });
 }

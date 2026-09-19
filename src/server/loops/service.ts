@@ -1,4 +1,5 @@
-import { asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { assertUserId } from '../../domain/ownership';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import * as schema from '../db/schema';
 import {
@@ -15,18 +16,19 @@ export type LoopDatabase = PostgresJsDatabase<typeof schema>;
 export type LoopTransaction = Parameters<
   Parameters<LoopDatabase['transaction']>[0]
 >[0];
-export function loopService(db: LoopDatabase | LoopTransaction) {
+export function loopService(
+  db: LoopDatabase | LoopTransaction,
+  userId: string,
+) {
+  assertUserId(userId);
   const { loops, loopEvents } = schema;
+  const owned = (id: string) => and(eq(loops.id, id), eq(loops.userId, userId));
   async function locked(
     tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
     id: string,
     version: number,
   ) {
-    const [loop] = await tx
-      .select()
-      .from(loops)
-      .where(eq(loops.id, id))
-      .for('update');
+    const [loop] = await tx.select().from(loops).where(owned(id)).for('update');
     if (!loop) throw new DomainError('This Loop could not be found.');
     if (loop.version !== version)
       throw new DomainError(
@@ -39,17 +41,18 @@ export function loopService(db: LoopDatabase | LoopTransaction) {
       return db
         .select()
         .from(loops)
+        .where(eq(loops.userId, userId))
         .orderBy(desc(loops.updatedAt), desc(loops.id));
     },
     async active() {
       return db
         .select()
         .from(loops)
-        .where(ne(loops.status, 'CLOSED'))
+        .where(and(eq(loops.userId, userId), ne(loops.status, 'CLOSED')))
         .orderBy(desc(loops.updatedAt));
     },
     async get(id: string) {
-      const [loop] = await db.select().from(loops).where(eq(loops.id, id));
+      const [loop] = await db.select().from(loops).where(owned(id));
       if (!loop) return null;
       const events = await db
         .select()
@@ -64,9 +67,30 @@ export function loopService(db: LoopDatabase | LoopTransaction) {
     ) {
       const input = loopInput.parse(raw);
       return db.transaction(async (tx) => {
+        if (provenance) {
+          const [candidate] = await tx
+            .select()
+            .from(schema.loopCandidates)
+            .where(
+              and(
+                eq(schema.loopCandidates.id, provenance.candidateId),
+                eq(schema.loopCandidates.userId, userId),
+              ),
+            );
+          if (
+            !candidate ||
+            candidate.status !== 'PENDING' ||
+            candidate.sourceReferences.length !==
+              provenance.sourceReferences.length ||
+            !candidate.sourceReferences.every((id) =>
+              provenance.sourceReferences.includes(id),
+            )
+          )
+            throw new DomainError('This source suggestion is not available.');
+        }
         const [loop] = await tx
           .insert(loops)
-          .values({ ...input, expectedBy: input.expectedBy || null })
+          .values({ ...input, userId, expectedBy: input.expectedBy || null })
           .returning();
         await tx.insert(loopEvents).values({
           loopId: loop.id,
@@ -98,7 +122,7 @@ export function loopService(db: LoopDatabase | LoopTransaction) {
             version: version + 1,
             updatedAt: new Date(),
           })
-          .where(eq(loops.id, id))
+          .where(owned(id))
           .returning();
         await tx.insert(loopEvents).values({
           loopId: id,
@@ -126,7 +150,7 @@ export function loopService(db: LoopDatabase | LoopTransaction) {
         await tx
           .update(loops)
           .set({ version: version + 1, updatedAt: new Date() })
-          .where(eq(loops.id, id));
+          .where(owned(id));
       });
     },
     async complete(id: string, version: number, raw: unknown) {
@@ -157,7 +181,7 @@ export function loopService(db: LoopDatabase | LoopTransaction) {
             updatedAt: now,
             version: version + 1,
           })
-          .where(eq(loops.id, id));
+          .where(owned(id));
       });
     },
   };

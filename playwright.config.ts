@@ -1,3 +1,4 @@
+import { TEST_AUTH_SECRET } from './tests/fixtures/auth';
 import { defineConfig, devices } from '@playwright/test';
 import { config } from 'dotenv';
 config({ path: '.env.local', quiet: true });
@@ -38,8 +39,7 @@ export default defineConfig({
     timeout: 120_000,
     env: {
       DATABASE_URL: process.env.TEST_DATABASE_URL,
-      APP_PASSWORD: 'test-only-loopend-password',
-      SESSION_SECRET: 'test-only-loopend-session-secret-not-for-deployment',
+      BETTER_AUTH_SECRET: TEST_AUTH_SECRET,
       GOOGLE_CLIENT_ID: '',
       GOOGLE_CLIENT_SECRET: '',
       SOURCE_TOKEN_ENCRYPTION_KEY: '',

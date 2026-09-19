@@ -22,6 +22,7 @@ import {
   loopCandidates,
 } from '../db/schema';
 import type { NormalizedEmail } from '../integrations/gmail/normalize';
+import { assertUserId } from '../../domain/ownership';
 
 export const sourceKey = (connectionId: string, value: string) =>
   createHash('sha256').update(`gmail:${connectionId}:${value}`).digest('hex');
@@ -34,7 +35,12 @@ export type PreparedScan = {
   })[];
   detectionEvents: DetectionEvent[];
 };
-export function scanStore(db: LoopDatabase) {
+export function scanStore(db: LoopDatabase, userId: string) {
+  assertUserId(userId);
+  const ownedConnection = (id: string) =>
+    and(eq(sourceConnections.id, id), eq(sourceConnections.userId, userId));
+  const ownedCandidate = (id: string) =>
+    and(eq(loopCandidates.id, id), eq(loopCandidates.userId, userId));
   return {
     async review() {
       const connections = await db
@@ -48,11 +54,17 @@ export function scanStore(db: LoopDatabase) {
           scanLeaseUntil: sourceConnections.scanLeaseUntil,
         })
         .from(sourceConnections)
+        .where(eq(sourceConnections.userId, userId))
         .orderBy(desc(sourceConnections.connectedAt));
       const candidates = await db
         .select()
         .from(loopCandidates)
-        .where(eq(loopCandidates.status, 'PENDING'))
+        .where(
+          and(
+            eq(loopCandidates.userId, userId),
+            eq(loopCandidates.status, 'PENDING'),
+          ),
+        )
         .orderBy(desc(loopCandidates.createdAt));
       const references = [
         ...new Set(
@@ -70,7 +82,12 @@ export function scanStore(db: LoopDatabase) {
               conversationId: externalEvents.conversationId,
             })
             .from(externalEvents)
-            .where(inArray(externalEvents.id, references))
+            .where(
+              and(
+                eq(externalEvents.userId, userId),
+                inArray(externalEvents.id, references),
+              ),
+            )
         : [];
       return { connections, candidates, evidence };
     },
@@ -87,7 +104,7 @@ export function scanStore(db: LoopDatabase) {
         })
         .where(
           and(
-            eq(sourceConnections.id, connectionId),
+            ownedConnection(connectionId),
             eq(sourceConnections.status, 'CONNECTED'),
             or(
               isNull(sourceConnections.scanLeaseUntil),
@@ -107,7 +124,7 @@ export function scanStore(db: LoopDatabase) {
         const [existing] = await db
           .select({ status: sourceConnections.status })
           .from(sourceConnections)
-          .where(eq(sourceConnections.id, connectionId));
+          .where(ownedConnection(connectionId));
         throw new ScanError(
           existing?.status === 'CONNECTED' ? 'BUSY' : 'DISCONNECTED',
         );
@@ -118,6 +135,11 @@ export function scanStore(db: LoopDatabase) {
       connectionId: string,
       normalized: NormalizedEmail[],
     ): Promise<PreparedScan> {
+      const [connection] = await db
+        .select({ id: sourceConnections.id })
+        .from(sourceConnections)
+        .where(ownedConnection(connectionId));
+      if (!connection) throw new ScanError('DISCONNECTED');
       const keys = normalized.map((event) =>
         sourceKey(connectionId, event.messageId),
       );
@@ -128,7 +150,13 @@ export function scanStore(db: LoopDatabase) {
               dedupeKey: externalEvents.dedupeKey,
             })
             .from(externalEvents)
-            .where(inArray(externalEvents.dedupeKey, keys))
+            .where(
+              and(
+                eq(externalEvents.userId, userId),
+                eq(externalEvents.connectionId, connectionId),
+                inArray(externalEvents.dedupeKey, keys),
+              ),
+            )
         : [];
       const byKey = new Map(
         existing.map((event) => [event.dedupeKey, event.id]),
@@ -146,6 +174,7 @@ export function scanStore(db: LoopDatabase) {
         .where(
           and(
             eq(loopCandidates.connectionId, connectionId),
+            eq(loopCandidates.userId, userId),
             or(
               inArray(loopCandidates.status, ['ACCEPTED', 'MERGED']),
               and(
@@ -183,7 +212,7 @@ export function scanStore(db: LoopDatabase) {
         const [connection] = await tx
           .select()
           .from(sourceConnections)
-          .where(eq(sourceConnections.id, connectionId))
+          .where(ownedConnection(connectionId))
           .for('update');
         if (
           !connection ||
@@ -203,6 +232,8 @@ export function scanStore(db: LoopDatabase) {
             .insert(externalEvents)
             .values({
               ...event,
+              connectionId,
+              userId,
               content: retained ? event.content : '',
               subject: retained ? event.subject : '',
               sender: retained ? event.sender : '',
@@ -220,7 +251,13 @@ export function scanStore(db: LoopDatabase) {
                 sender: event.sender,
                 metadata: event.metadata,
               })
-              .where(eq(externalEvents.id, event.id));
+              .where(
+                and(
+                  eq(externalEvents.id, event.id),
+                  eq(externalEvents.userId, userId),
+                  eq(externalEvents.connectionId, connectionId),
+                ),
+              );
         }
         let added = 0;
         const detectedConversations: string[] = [];
@@ -244,6 +281,7 @@ export function scanStore(db: LoopDatabase) {
             .insert(loopCandidates)
             .values({
               ...candidate,
+              userId,
               confidence: candidate.confidence,
               connectionId,
               conversationId,
@@ -266,6 +304,7 @@ export function scanStore(db: LoopDatabase) {
               .where(
                 and(
                   eq(loopCandidates.dedupeKey, dedupeKey),
+                  eq(loopCandidates.userId, userId),
                   or(
                     eq(loopCandidates.status, 'PENDING'),
                     and(
@@ -299,6 +338,7 @@ export function scanStore(db: LoopDatabase) {
             .where(
               and(
                 eq(loopCandidates.connectionId, connectionId),
+                eq(loopCandidates.userId, userId),
                 eq(loopCandidates.status, 'PENDING'),
                 inArray(loopCandidates.conversationId, evaluatedConversations),
                 detectedConversations.length
@@ -321,6 +361,7 @@ export function scanStore(db: LoopDatabase) {
           .where(
             and(
               eq(externalEvents.connectionId, connectionId),
+              eq(externalEvents.userId, userId),
               sql`NOT EXISTS (SELECT 1 FROM ${loopCandidates} WHERE ${externalEvents.id} = ANY(${loopCandidates.sourceReferences}))`,
             ),
           );
@@ -334,7 +375,7 @@ export function scanStore(db: LoopDatabase) {
             lastScanError: null,
             updatedAt: new Date(),
           })
-          .where(eq(sourceConnections.id, connectionId));
+          .where(ownedConnection(connectionId));
         return added;
       });
     },
@@ -352,7 +393,7 @@ export function scanStore(db: LoopDatabase) {
         })
         .where(
           and(
-            eq(sourceConnections.id, connectionId),
+            ownedConnection(connectionId),
             eq(sourceConnections.scanLeaseId, lease),
           ),
         );
@@ -362,7 +403,7 @@ export function scanStore(db: LoopDatabase) {
         const [candidate] = await tx
           .select()
           .from(loopCandidates)
-          .where(eq(loopCandidates.id, id))
+          .where(ownedCandidate(id))
           .for('update');
         if (!candidate) throw new ScanError('STALE');
         if (candidate.status === 'ACCEPTED' && candidate.loopId)
@@ -375,6 +416,7 @@ export function scanStore(db: LoopDatabase) {
           .where(
             and(
               eq(externalEvents.connectionId, candidate.connectionId),
+              eq(externalEvents.userId, userId),
               inArray(externalEvents.id, candidate.sourceReferences),
             ),
           );
@@ -383,7 +425,7 @@ export function scanStore(db: LoopDatabase) {
           sources.length !== candidate.sourceReferences.length
         )
           throw new ScanError('STALE');
-        const loop = await loopService(tx).create(
+        const loop = await loopService(tx, userId).create(
           {
             title: candidate.title,
             summary: candidate.summary,
@@ -407,7 +449,7 @@ export function scanStore(db: LoopDatabase) {
             version: version + 1,
             updatedAt: new Date(),
           })
-          .where(eq(loopCandidates.id, id));
+          .where(ownedCandidate(id));
         return loop.id;
       });
     },
@@ -416,7 +458,7 @@ export function scanStore(db: LoopDatabase) {
         const [candidate] = await tx
           .select()
           .from(loopCandidates)
-          .where(eq(loopCandidates.id, id))
+          .where(ownedCandidate(id))
           .for('update');
         if (
           candidate?.status === 'DISMISSED' &&
@@ -437,7 +479,7 @@ export function scanStore(db: LoopDatabase) {
             version: version + 1,
             updatedAt: new Date(),
           })
-          .where(eq(loopCandidates.id, id));
+          .where(ownedCandidate(id));
       });
     },
   };

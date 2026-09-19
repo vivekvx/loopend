@@ -8,7 +8,7 @@ The model is **Detect → Understand → Wait → Act → Verify → Close**. An
 
 ## Initial working product
 
-One private personal workspace. Users manually create Loops, record context, expected dates, responsibility, next actions, and verification conditions. They update state, append activity, and explicitly verify an outcome with written evidence before closing. Closed Loops remain readable and immutable through application commands.
+Each account has its own private personal workspace. Users manually create Loops, record context, expected dates, responsibility, next actions, and verification conditions. They update state, append activity, and explicitly verify an outcome with written evidence before closing. Closed Loops remain readable and immutable through application commands.
 
 The dashboard groups open Loops into **Needs you** (explicitly needs the user, or expected today/overdue) and **Being handled** (all other active Loops). Its calm headline reflects the real attention count. Recently closed shows the last three updated closed records; the closed page shows all. Expected dates are calendar dates, with the initial workspace using UTC for consistent day boundaries.
 
@@ -27,7 +27,7 @@ Active states may move between each other as the situation changes. CLOSED is ex
 
 ## Product honesty
 
-The landing page tells the intended completion-agent story. Its CTA enters the working workspace. Loop Scan connects Gmail and suggests unfinished situations for review. Calendar/browser ingestion, scheduled follow-up, autonomous action, and external verification are not implemented. Evidence for closing a Loop is user-attested text, not independently verified by an agent.
+The landing page tells the intended completion-agent story. Its CTA leads to account creation (or the dashboard for an authenticated user). Loop Scan connects Gmail and suggests unfinished situations for review. Calendar/browser ingestion, scheduled follow-up, autonomous action, and external verification are not implemented. Evidence for closing a Loop is user-attested text, not independently verified by an agent.
 
 The visual system uses an incomplete rust-red circle, warm paper, Manrope for readable UI, and Newsreader for editorial emphasis. A closed circle and muted green indicate completion. Typography is self-hosted. Animation explains the same refund from scattered context to verified bank credit; all story text is server-rendered.
 
@@ -50,3 +50,13 @@ The detector receives shortened text, sender, subject, timestamp, direction, gro
 Loopend stores the connected account identity, encrypted Google tokens, message/thread identifiers, timestamps, and candidate decisions. Cited evidence retains normalized excerpts (up to 2,000 characters per message), sender, subject, and date metadata. Uncited events retain only trace/dedupe identifiers, timestamps, and direction. Saved suggestions and evidence remain until an operator removes them; there is no automatic retention expiry or erase-all UI yet.
 
 Disconnect immediately removes local tokens, stops new scans, invalidates in-flight scan writes, and attempts Google revocation. If revocation fails, the UI directs the user to Google account permissions. Suggestions, cited excerpts, ignored-conversation dedupe records, and real Loops remain. Reconnecting the same account preserves decisions. Review the configured AI provider’s data handling before scanning sensitive mail.
+
+## Accounts and ownership
+
+Email/password accounts provide sign-up, sign-in, persistent sessions, and sign-out. Settings shows account identity, Gmail connection status, disconnect controls, and sign-out. Signing out invalidates that session; other devices keep their own sessions. Marketing remains public. Every application surface and command is authenticated, including direct links and form submissions.
+
+Loops, history, connections, scan state, candidates, and source evidence are isolated by user. A Gmail account is reserved to one Loopend account, including after disconnect, so another user cannot take over saved evidence or ignored-conversation decisions. Gmail authorization is separate from signing into Loopend and must begin and finish in the same authenticated session.
+
+Existing pre-account data is preserved in quarantine, invisible to new accounts. An operator may explicitly transfer it to a named existing user after reviewing ownership. Signup never claims old data. Local seeds require a chosen account ID.
+
+Email addresses are login identifiers, not verified proof of mailbox ownership. This release does not include email verification, password reset email, social sign-in, account deletion, or cross-account transfer UI. No buttons pretend those capabilities exist. Gmail access always requires Google's separate authorization flow.

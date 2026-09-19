@@ -5,6 +5,6 @@ import { loopService } from './service';
 
 // Authenticate at the data boundary as well as the layout. RSC segments can render independently.
 export async function workspaceQueries() {
-  await requireWorkspace();
-  return loopService(getDb());
+  const { user } = await requireWorkspace();
+  return loopService(getDb(), user.id);
 }

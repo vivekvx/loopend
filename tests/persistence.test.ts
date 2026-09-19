@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import postgres from 'postgres';
@@ -16,9 +17,15 @@ test('PostgreSQL lifecycle, immutable events, stale edits, and concurrent comple
   );
   const client = postgres(url, { max: 3 });
   const db = drizzle(client, { schema });
-  const service = loopService(db);
+  const userId = randomUUID();
+  const service = loopService(db, userId);
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
+    await db.insert(schema.user).values({
+      id: userId,
+      name: 'Lifecycle test',
+      email: `${userId}@example.com`,
+    });
     const input = {
       title: `Test refund ${Date.now()}`,
       summary: 'A returned order.',

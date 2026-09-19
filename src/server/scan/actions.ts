@@ -25,7 +25,7 @@ function failure(error: unknown): ScanActionState {
   };
 }
 export async function connectGmail(): Promise<ScanActionState> {
-  await requireWorkspace();
+  const { user, session } = await requireWorkspace();
   let url: string;
   try {
     if ((await headers()).get('origin') !== scanSetup().origin)
@@ -43,6 +43,8 @@ export async function connectGmail(): Promise<ScanActionState> {
           state: state.state,
           verifier: state.verifier,
           expiresAt: state.expiresAt,
+          userId: user.id,
+          sessionId: session.id,
         },
         'gmail:oauth',
       ),
@@ -63,13 +65,13 @@ export async function scanGmail(
   _state: ScanActionState,
   form: FormData,
 ): Promise<ScanActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   try {
     const setup = scanSetup();
     if (!setup.gmailReady || !setup.aiReady) throw new ScanError('SETUP');
     const id = z.uuid().parse(form.get('connectionId'));
     const { client } = gmailRuntime();
-    const result = await loopScanService(getDb(), {
+    const result = await loopScanService(getDb(), user.id, {
       source: client,
       detector: structuredDetector({
         apiKey: process.env.LOOP_SCAN_AI_API_KEY!,
@@ -91,11 +93,11 @@ export async function acceptCandidate(
   _state: ScanActionState,
   form: FormData,
 ): Promise<ScanActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   let loopId: string;
   try {
     const { id, version } = candidateIdentity.parse(Object.fromEntries(form));
-    loopId = await scanStore(getDb()).accept(id, version);
+    loopId = await scanStore(getDb(), user.id).accept(id, version);
   } catch (error) {
     return failure(error);
   }
@@ -107,10 +109,10 @@ export async function ignoreCandidate(
   _state: ScanActionState,
   form: FormData,
 ): Promise<ScanActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   try {
     const { id, version } = candidateIdentity.parse(Object.fromEntries(form));
-    await scanStore(getDb()).dismiss(id, version);
+    await scanStore(getDb(), user.id).dismiss(id, version);
     revalidatePath('/app/scan');
     return {
       message:
@@ -124,11 +126,11 @@ export async function disconnectGmail(
   _state: ScanActionState,
   form: FormData,
 ): Promise<ScanActionState> {
-  await requireWorkspace();
+  const { user } = await requireWorkspace();
   let notice = 'disconnected';
   try {
     const id = z.uuid().parse(form.get('connectionId'));
-    const connection = await detachConnection(getDb(), id);
+    const connection = await detachConnection(getDb(), user.id, id);
     let revoked = true;
     if (connection?.tokenCiphertext) {
       try {
@@ -145,6 +147,7 @@ export async function disconnectGmail(
       }
     }
     revalidatePath('/app/scan');
+    revalidatePath('/app/settings');
     if (!revoked) notice = 'revocation-unconfirmed';
   } catch (error) {
     return failure(error);

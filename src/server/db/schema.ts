@@ -12,7 +12,10 @@ import {
   index,
   check,
   uniqueIndex,
+  foreignKey,
 } from 'drizzle-orm/pg-core';
+import { user } from './auth-schema';
+export * from './auth-schema';
 import { statuses } from '../../domain/loops';
 import { candidateStatuses } from '../../domain/scan';
 
@@ -21,6 +24,9 @@ export const loops = pgTable(
   'loops',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
     title: text('title').notNull(),
     summary: text('summary').notNull().default(''),
     desiredOutcome: text('desired_outcome').notNull(),
@@ -39,6 +45,8 @@ export const loops = pgTable(
     closedAt: timestamp('closed_at', { withTimezone: true }),
   },
   (t) => [
+    uniqueIndex('loops_id_owner_unique').on(t.id, t.userId),
+    index('loops_owner_status_updated_idx').on(t.userId, t.status, t.updatedAt),
     index('loops_status_updated_idx').on(t.status, t.updatedAt),
     check(
       'closed_timestamp_matches_state',
@@ -96,6 +104,9 @@ export const sourceConnections = pgTable(
   'source_connections',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
     provider: text('provider').notNull(),
     accountId: text('account_id').notNull(),
     accountEmail: text('account_email').notNull(),
@@ -119,6 +130,8 @@ export const sourceConnections = pgTable(
     scanLeaseUntil: timestamp('scan_lease_until', { withTimezone: true }),
   },
   (t) => [
+    uniqueIndex('source_id_owner_unique').on(t.id, t.userId),
+    index('source_owner_idx').on(t.userId),
     uniqueIndex('source_provider_account_unique').on(t.provider, t.accountId),
   ],
 );
@@ -127,6 +140,9 @@ export const externalEvents = pgTable(
   'external_events',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
     connectionId: uuid('connection_id')
       .notNull()
       .references(() => sourceConnections.id),
@@ -149,6 +165,16 @@ export const externalEvents = pgTable(
       .defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: 'external_connection_owner_fk',
+      columns: [t.connectionId, t.userId],
+      foreignColumns: [sourceConnections.id, sourceConnections.userId],
+    }),
+    uniqueIndex('external_id_owner_connection_unique').on(
+      t.id,
+      t.userId,
+      t.connectionId,
+    ),
     index('external_connection_conversation_idx').on(
       t.connectionId,
       t.conversationId,
@@ -160,6 +186,9 @@ export const loopCandidates = pgTable(
   'loop_candidates',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
     connectionId: uuid('connection_id')
       .notNull()
       .references(() => sourceConnections.id),
@@ -187,6 +216,21 @@ export const loopCandidates = pgTable(
       .defaultNow(),
   },
   (t) => [
+    foreignKey({
+      name: 'candidate_connection_owner_fk',
+      columns: [t.connectionId, t.userId],
+      foreignColumns: [sourceConnections.id, sourceConnections.userId],
+    }),
+    foreignKey({
+      name: 'candidate_loop_owner_fk',
+      columns: [t.loopId, t.userId],
+      foreignColumns: [loops.id, loops.userId],
+    }),
+    index('candidate_owner_status_created_idx').on(
+      t.userId,
+      t.status,
+      t.createdAt,
+    ),
     index('candidate_status_created_idx').on(t.status, t.createdAt),
     check(
       'accepted_candidate_has_loop',

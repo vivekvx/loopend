@@ -7,6 +7,7 @@ export function validateOAuthState(
   vault: ReturnType<typeof tokenVault>,
   cookie: string | undefined,
   suppliedState: string | null,
+  identity: { userId: string; sessionId: string },
 ) {
   try {
     const state = z
@@ -14,12 +15,16 @@ export function validateOAuthState(
         state: z.string().min(32).max(100),
         verifier: z.string().min(43).max(128),
         expiresAt: z.number().finite(),
+        userId: z.string().min(1),
+        sessionId: z.string().min(1),
       })
       .parse(vault.open(cookie ?? '', 'gmail:oauth'));
     const supplied = Buffer.from(suppliedState ?? '');
     const expected = Buffer.from(state.state);
     if (
       Date.now() >= state.expiresAt ||
+      state.userId !== identity.userId ||
+      state.sessionId !== identity.sessionId ||
       supplied.length !== expected.length ||
       !timingSafeEqual(supplied, expected)
     )

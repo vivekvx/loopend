@@ -12,13 +12,14 @@ import { scanStore } from './store';
 
 export function loopScanService(
   db: LoopDatabase,
+  userId: string,
   dependencies: {
     source: MailSource;
     detector: Detector;
     encryptionKey: string;
   },
 ) {
-  const store = scanStore(db);
+  const store = scanStore(db, userId);
   const vault = tokenVault(dependencies.encryptionKey);
   return {
     async scan(connectionId: string) {
@@ -49,6 +50,7 @@ export function loopScanService(
               .where(
                 and(
                   eq(sourceConnections.id, connectionId),
+                  eq(sourceConnections.userId, userId),
                   eq(sourceConnections.scanLeaseId, lease),
                   eq(sourceConnections.status, 'CONNECTED'),
                 ),

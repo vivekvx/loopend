@@ -34,7 +34,7 @@ export default function LandingPage() {
               still open.
               <br className="desktop-break" /> And a way to see it through.
             </p>
-            <Link className="button hero-cta" href="/app">
+            <Link className="button hero-cta" href="/sign-up">
               Find my open loops <span aria-hidden="true">↗</span>
             </Link>
             <span className="cta-note">
@@ -88,7 +88,7 @@ export default function LandingPage() {
             Loopend remembers what hasn’t finished, takes the next step,
             <br className="desktop-break" /> and stays on it until it’s done.
           </p>
-          <Link className="button" href="/app">
+          <Link className="button" href="/sign-up">
             Find my open loops <span aria-hidden="true">↗</span>
           </Link>
           <span className="cta-note">

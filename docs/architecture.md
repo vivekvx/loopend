@@ -11,7 +11,7 @@ Loopend is a Next.js App Router modular monolith on the Node runtime, with stric
 - `src/server/db`: lazy pooled PostgreSQL client and Drizzle schema.
 - `src/server/loops/service.ts`: commands and queries, independent of React and Next request APIs. Future ingestion and workers can call this boundary.
 - `src/server/loops/actions.ts`: authenticated Server Actions, boundary validation, safe user errors, revalidation, redirects.
-- `src/server/auth.ts`: private-workspace password gate, signed expiring HTTP-only cookies, persistent login throttling.
+- `src/server/auth.ts` and `src/server/auth/config.ts`: lazy Better Auth instance and database-validated session boundary; no custom password hashing/session signing.
 - `src/app`: server-rendered routes; small form components handle pending and validation states.
 - `src/components/marketing`: static first render and optional dynamically imported graphics.
 
@@ -23,13 +23,49 @@ Commands lock the Loop row with `FOR UPDATE`, compare an optimistic version, val
 
 A PostgreSQL trigger rejects event UPDATE and DELETE. A CHECK constraint requires CLOSED and `closed_at` to agree. The service rejects all mutations to closed Loops. The database owner can bypass database protections, so production should use a least-privileged runtime role and a separate migration role. Do not grant the runtime role schema ownership or TRUNCATE.
 
-Versioned migrations are committed in `drizzle/`; `db:migrate` uses Drizzle’s migration journal. `db:generate` emits schema migrations. The immutable-event trigger is a custom migration. `db:seed` is explicit, rejects production mode, and skips existing example titles. It never deletes records.
+Versioned migrations are committed in `drizzle/`; `db:migrate` uses Drizzle’s migration journal. `db:generate` emits schema migrations. The immutable-event trigger is a custom migration. `db:seed <user-id>` is explicit, requires an existing account, rejects production mode, and skips that owner’s existing example titles. It never deletes records.
 
-## Private workspace
+## Authentication and ownership
 
-This foundation is a single personal workspace, not multi-user authentication. In development, unset APP_PASSWORD allows local use; dev and start bind to loopback. Production fails closed unless APP_PASSWORD has at least 12 characters and SESSION_SECRET at least 32. Set both with strong randomly generated values and serve over HTTPS. Cookies are signed, expire in seven days, use HttpOnly/SameSite=Lax, and are Secure in production. Rotating either secret invalidates sessions. A database-backed global limit allows 15 login attempts per minute across instances. Next Server Actions enforce same-origin mutation requests.
+Better Auth 1.7 provides maintained email/password authentication with its Drizzle PostgreSQL adapter. Library-owned scrypt password hashing, database-backed sessions, cookie signing, CSRF/origin checks, and rate limiting replace APP_PASSWORD and SESSION_SECRET completely. No hosted identity service or second database is required. Authentication has no Google provider and account linking is disabled; Gmail is a separate data authorization flow.
 
-Before supporting multiple people, introduce an authenticated workspace identity, ownership keys on Loops/events, and scoped repository queries. Do not make this app public with shared data by removing the gate.
+`auth_users`, `auth_accounts`, `auth_sessions`, `auth_verifications`, and `auth_rate_limits` use the library schema. UUID defaults support adapter-generated inserts. Passwords require 12–128 characters. Sessions last seven days, with daily renewal through library interactions. Cookies are HttpOnly, SameSite=Lax, and Secure in production. Cookie caching is disabled: protected server reads validate against the database, so logout immediately invalidates a copied cookie. Successful sign-in/signup and logout use full navigation to discard the previous identity's client route cache.
+
+`requireWorkspace()` returns the authenticated user/session. All request-boundary commands derive the user ID from this result, never FormData/query parameters. `loopService(db, userId)`, `scanStore(db, userId)`, `loopScanService(db, userId, dependencies)`, and connection helpers require an explicit trusted user ID. Queries, locks, updates, lease acquisition/refresh/failure, disconnect, and promotion include owner predicates. Missing and foreign IDs return the same unavailable/not-found responses. There is no development bypass. Server layouts are an additional check, not the data authorization boundary.
+
+Loops, source connections, external events, and candidates have NOT NULL `user_id` foreign keys. Composite foreign keys ensure external events and candidates share their connection's owner, and promoted candidates share their Loop's owner. A deferred evidence trigger enforces every candidate source reference belongs to its owner and connection. Ownership cannot change between real users. External evidence identity cannot be reassigned or deleted while referenced. Immutable timeline events belong transitively to their Loop through its required foreign key; their records are never rewritten to add ownership. Promotion validates source ownership through the existing Loop service and commits exactly once under the candidate lock.
+
+The provider/account unique reservation remains global deliberately: an OAuth callback may reconnect only the same owner's record. Conditional upsert prevents races/takeovers, including after disconnect. This reservation is not a login identity. Gmail's encrypted state includes both initiating `userId` and `sessionId`; the callback validates them before Google calls and rechecks the session before saving. Existing account-bound token encryption remains unchanged.
+
+### Security and deployment
+
+Set a high-entropy `BETTER_AUTH_SECRET` (at least 32 characters) and canonical `APP_URL` in every environment. Generate a secret with `openssl rand -base64 32`; never use test fixtures. HTTPS is required except for local loopback development/tests. Old workspace-password cookies grant no access. Public landing rendering/builds need no auth secret; auth/app requests fail closed without configuration.
+
+Better Auth's database limiter persists across instances: sign-in is capped at 10 attempts/minute, signup at 5/minute, with a general 100/minute limit per request key. Deploy behind a trusted reverse proxy that overwrites forwarded client-IP headers and blocks direct backend access; IP rate limits are not trustworthy if clients can spoof those headers. Apply edge abuse/bot controls for a public launch. The app binds to loopback by default. Error UI is generic and never echoes provider errors/passwords. Auth logger payloads are disabled. Existing application errors likewise avoid sensitive payloads.
+
+Only the configured origin is trusted. App navigation destinations are fixed; Better Auth rejects off-origin callback URLs. Next Server Actions retain their same-origin protection. Configure HTTPS/HSTS at the hosting proxy, preserve the app's anti-framing/nosniff headers, and redact OAuth callback queries and sensitive request bodies from infrastructure logs. Keep migration credentials separate; runtime must not own tables, disable triggers, or run TRUNCATE. Service-scoped authorization is the tenant boundary, with relational constraints as defense in depth; this is not PostgreSQL RLS.
+
+Email verification and password-reset delivery are not configured in this minimum email/password release. Email is a login identifier, never authorization to matching Gmail or legacy data. No social provider/linking or email-based automatic data claiming is enabled. Add verified-email/recovery delivery through the library before offering those capabilities. Authentication records and backups are sensitive even though passwords are hashed and Gmail tokens are encrypted.
+
+### Existing-data migration
+
+Stop the old application/writes, back up PostgreSQL, and run migrations before deploying the new application:
+
+- `0005_old_thor_girl`: adds auth tables and owner columns, backfills existing data to reserved owner `00000000-0000-0000-0000-000000000000`, then removes all owner defaults. Adds indexes and composite owner foreign keys (deferrable for controlled legacy transfer).
+- `0006_ownership_guards`: blocks credentials/sessions for quarantine, makes real ownership immutable, validates candidate evidence, and protects referenced source identity.
+- `0007_shallow_ikaris`: adds PostgreSQL UUID defaults required by auth adapter inserts.
+
+The reserved owner is a non-login quarantine principal with no password or session. No newly registered user can access its records. IDs, closed states, event history, token ciphertext, candidate decisions, and provenance survive. The old `access_limits` table remains inert; no shared-password path reads it.
+
+After reviewing who actually owns the historical data, create the intended account and run the operator-only command:
+
+```sh
+pnpm db:claim-legacy <existing-user-id> --confirm-legacy-transfer
+```
+
+This explicitly transfers **all quarantined data** in one transaction, with an advisory lock and deferred owner constraints. It never changes immutable timeline events; their owner follows the parent Loop. It is repeat-safe and refuses unknown target users. It is not exposed to HTTP, and must not be used on a mixed-owner historical dataset. For mixed data, retain quarantine and perform a separately reviewed, record-specific migration. Production transfer requires an operator decision and backup; it never happens automatically. Settings does not expose this operation. To find the intended ID, an operator can query `auth_users` by the known email without reading credential/session tables.
+
+Local development also requires signup. Optional `pnpm db:seed <user-id>` creates examples for that existing account only. No account/password is seeded automatically. A generated secret in the ignored local env file is a development convenience, not committed configuration.
 
 ## Graphics
 
@@ -53,7 +89,7 @@ The detector receives only normalized useful text and minimal metadata; Gmail id
 
 Persistence locks and checks the connection lease before writing events/candidates and finishing the scan. Disconnect/reconnect fences stale writers. Refresh-token updates are also lease-fenced. Successful re-evaluation refreshes or withdraws pending suggestions, but cannot overwrite accepted/ignored decisions. Failed scans preserve prior suggestions and record only a safe error code.
 
-Acceptance locks the candidate, checks status/version/evidence, and calls `loopService(tx).create` inside the same transaction (nested savepoint). Creation and candidate acceptance commit together. The Loop gets `loop.created` and immutable `source.accepted` provenance events. Repeated acceptance returns its existing Loop ID; simultaneous requests cannot create duplicates. No AI output calls the Loop service directly.
+Acceptance locks the candidate, checks status/version/evidence, and calls `loopService(tx, userId).create` inside the same transaction (nested savepoint). Creation and candidate acceptance commit together. The Loop gets `loop.created` and immutable `source.accepted` provenance events. Repeated acceptance returns its existing Loop ID; simultaneous requests cannot create duplicates. No AI output calls the Loop service directly.
 
 ### Gmail and AI setup
 
@@ -71,7 +107,7 @@ Acceptance locks the candidate, checks status/version/evidence, and calls `loopS
 | `LOOP_SCAN_AI_BASE_URL`       | HTTPS OpenAI-compatible API root; defaults to `https://ai-gateway.vercel.sh/v1`       |
 | `LOOP_SCAN_AI_MODEL`          | Structured-output-capable model ID; defaults to `openai/gpt-4.1-mini` for the gateway |
 
-Only `https://www.googleapis.com/auth/gmail.readonly` is requested. Gmail’s profile API supplies account identity; no send/delete/modify or additional profile scopes are needed. OAuth uses PKCE S256 and random state bound to an authenticated, encrypted, HTTP-only, SameSite=Lax cookie with a ten-minute lifetime. The callback requires workspace authentication, validates state/expiry, and consumes the cookie. Tokens are encrypted with AES-256-GCM and account-specific associated data. Changing the encryption key requires reconnecting accounts unless an explicit key-rotation migration is provided. Expired access tokens refresh server-side; revoked grants become NEEDS_REAUTH with local tokens erased.
+Only `https://www.googleapis.com/auth/gmail.readonly` is requested. Gmail’s profile API supplies account identity; no send/delete/modify or additional profile scopes are needed. OAuth uses PKCE S256 and random state bound to an authenticated, encrypted, HTTP-only, SameSite=Lax cookie with a ten-minute lifetime. The callback requires workspace authentication, validates state/expiry/user/session, and consumes the cookie. Tokens are encrypted with AES-256-GCM and account-specific associated data. Changing the encryption key requires reconnecting accounts unless an explicit key-rotation migration is provided. Expired access tokens refresh server-side; revoked grants become NEEDS_REAUTH with local tokens erased.
 
 Normal application logs never contain email bodies, model payloads, tokens, or provider error responses. Configure infrastructure access-log redaction for OAuth callback query parameters as well. Do not expose source tables or token ciphertext through client components. Backups containing source data are sensitive.
 
@@ -87,13 +123,13 @@ cp .env.example .env.local
 createdb loopend_dev
 createdb loopend_test
 pnpm db:migrate
-pnpm db:seed # optional realistic development records
+pnpm db:seed <user-id> # optional, after creating the intended account
 pnpm dev
 ```
 
-Edit `.env.local` for your database username/password if needed. Use `DATABASE_URL` for the app and a different `TEST_DATABASE_URL` for tests. No production secrets are committed. `pnpm test` applies migrations to the test database; browser tests use that database on a separate production server at port 3100, so run `pnpm build` first. Browser credentials are test-only fixtures and must never be deployed. Test records remain only in the isolated test database.
+Edit `.env.local` for your database username/password if needed. Use `DATABASE_URL` for the app and a different `TEST_DATABASE_URL` for tests. No production secrets are committed. `pnpm test` applies migrations to the test database; browser tests use that database on a separate production server at port 3100, so run `pnpm build` first. Browser identities/passwords are generated for each test through Better Auth; the test signing secret must never be deployed. Test records remain only in the isolated test database.
 
-Scan tests mock the Google and AI HTTP boundaries, not persistence. Real PostgreSQL tests cover deduplication, sticky ignores, invalid output, confidence filtering, lease fencing, and concurrent/repeated promotion. Browser tests cover missing configuration, inspectable evidence, acceptance provenance, ignoring, and callback forgery, alongside the existing lifecycle, auth, graphics fallback, and reduced-motion suite. No automated test needs a Gmail account or paid model call.
+Scan tests mock the Google and AI HTTP boundaries, not persistence. Real PostgreSQL tests cover deduplication, sticky ignores, invalid output, confidence filtering, lease fencing, and concurrent/repeated promotion. Browser tests cover missing configuration, inspectable evidence, acceptance provenance, ignoring, and callback forgery, alongside the existing lifecycle, auth, graphics fallback, and reduced-motion suite. Isolation tests also exercise real signup/sign-in/logout, copied-cookie revocation, cross-user service access, ownership constraints, and explicit legacy transfer. No automated test needs a Gmail account or paid model call.
 
 ```sh
 pnpm lint
@@ -104,6 +140,8 @@ pnpm test:e2e
 pnpm format:check
 ```
 
-For production, set DATABASE_URL, APP_PASSWORD, and SESSION_SECRET; run migrations as a release step, then `pnpm build && pnpm start`. Never seed production. The build needs no live database because workspace pages render on request. Hosting should provide PostgreSQL backups, TLS, secret management, and request logs. No deployment is created automatically.
+For production, set DATABASE_URL, APP_URL, and BETTER_AUTH_SECRET; run migrations as a release step, then `pnpm build && pnpm start`. Never seed production. The build needs no live database because workspace pages render on request. Hosting should provide PostgreSQL backups, TLS, secret management, and request logs. No deployment is created automatically.
 
 If deploying to Vercel, install its CLI (`npm i -g vercel`) for `vercel env pull`, `vercel deploy`, and `vercel logs`. The app uses ordinary PostgreSQL connections and can use a managed provider’s pooled URL. Keep migration credentials separate and use the provider’s direct URL for migrations where required.
+
+The pnpm workspace config narrowly overrides the legacy Drizzle loader’s esbuild dependency to a patched version and explicitly allows build scripts for esbuild and unrs-resolver. Keep the lockfile and these audited build approvals committed.

@@ -3,7 +3,9 @@
 - Read `docs/product.md` and `docs/architecture.md` before changing domain behavior. Use current code as implementation truth.
 - A Loop represents an expected real-world outcome, not a todo. An action never implies completion.
 - Keep business rules in `src/domain` and transactional operations in `src/server/loops/service.ts`. React renders and submits commands.
-- All workspace reads and mutations require `requireWorkspace()`. Keep credentials and database access server-side. This is one private workspace, not a multi-tenant app.
+- All application reads and mutations derive identity from `requireWorkspace()` (Better Auth's database session). Pass that user ID to every Loop/Scan service. Never authorize using browser-supplied user IDs or emails. There is no development auth bypass.
+- Preserve immutable ownership, composite owner foreign keys, and evidence guards. Legacy data remains quarantined until an explicit operator transfer; never claim it during signup. Timeline ownership follows its Loop without rewriting events.
+- Authentication and Gmail authorization are separate. Gmail state must match both the initiating user and session. A provider/account reservation cannot be taken over by another user, even after disconnect.
 - Validate every command with Zod. Lock the Loop and compare its version before mutations. Append events and update the Loop in the same transaction.
 - Events are append-only. Never rewrite activity history. Only the explicit verification command can close a Loop, from `VERIFYING`, with evidence and confirmation.
 - Detector output is untrusted: validate strict schemas and evidence references. Candidates are not Loops; only human approval may promote one through the existing Loop service in the candidate transaction.

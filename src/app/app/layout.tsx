@@ -17,9 +17,16 @@ export default async function WorkspaceLayout({
           <Link href="/app/scan">Loop Scan</Link>
           <Link href="/app/closed">Closed</Link>
         </nav>
-        <span className="workspace-label">
-          Personal space<span className="avatar">you</span>
-        </span>
+        <Link
+          className="account-link"
+          href="/app/settings"
+          aria-label="Account settings"
+        >
+          Account
+          <span className="avatar" aria-hidden="true">
+            you
+          </span>
+        </Link>
       </header>
       {children}
       <footer className="app-footer">

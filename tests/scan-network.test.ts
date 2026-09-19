@@ -24,22 +24,39 @@ const tokens = {
 
 test('OAuth callback state rejects forgery, missing cookies, tampering and expiry', () => {
   const vault = tokenVault(randomBytes(32).toString('base64'));
-  const state = gmailClient(config).begin();
+  const identity = { userId: randomUUID(), sessionId: randomUUID() };
+  const state = { ...gmailClient(config).begin(), ...identity };
   const cookie = vault.seal(state, 'gmail:oauth');
+  assert.throws(
+    () =>
+      validateOAuthState(vault, cookie, state.state, {
+        ...identity,
+        userId: randomUUID(),
+      }),
+    /GMAIL_AUTH/,
+  );
+  assert.throws(
+    () =>
+      validateOAuthState(vault, cookie, state.state, {
+        ...identity,
+        sessionId: randomUUID(),
+      }),
+    /GMAIL_AUTH/,
+  );
   assert.equal(
-    validateOAuthState(vault, cookie, state.state).verifier,
+    validateOAuthState(vault, cookie, state.state, identity).verifier,
     state.verifier,
   );
   assert.throws(
-    () => validateOAuthState(vault, cookie, 'forged'),
+    () => validateOAuthState(vault, cookie, 'forged', identity),
     /GMAIL_AUTH/,
   );
   assert.throws(
-    () => validateOAuthState(vault, undefined, state.state),
+    () => validateOAuthState(vault, undefined, state.state, identity),
     /GMAIL_AUTH/,
   );
   assert.throws(
-    () => validateOAuthState(vault, cookie.slice(0, -8), state.state),
+    () => validateOAuthState(vault, cookie.slice(0, -8), state.state, identity),
     /GMAIL_AUTH/,
   );
   assert.throws(
@@ -48,6 +65,7 @@ test('OAuth callback state rejects forgery, missing cookies, tampering and expir
         vault,
         vault.seal({ ...state, expiresAt: 0 }, 'gmail:oauth'),
         state.state,
+        identity,
       ),
     /GMAIL_AUTH/,
   );

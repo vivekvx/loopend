@@ -27,13 +27,14 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
   const db = drizzle(client, { schema });
   const key = randomBytes(32).toString('base64');
   const vault = tokenVault(key);
+  const userId = randomUUID();
   const tokens = {
     accessToken: 'test-access',
     refreshToken: 'test-refresh',
     expiresAt: Date.now() + 3600_000,
   };
   const newConnection = () =>
-    saveConnection(db, `${randomUUID()}@example.com`, tokens, vault);
+    saveConnection(db, userId, `${randomUUID()}@example.com`, tokens, vault);
   const resetCooldown = (id: string) =>
     db
       .update(schema.sourceConnections)
@@ -51,10 +52,19 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
       candidates: events.length ? [candidateFixture([events[0].id])] : [],
     }),
   };
-  const service = loopScanService(db, { source, detector, encryptionKey: key });
-  const store = scanStore(db);
+  const service = loopScanService(db, userId, {
+    source,
+    detector,
+    encryptionKey: key,
+  });
+  const store = scanStore(db, userId);
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
+    await db.insert(schema.user).values({
+      id: userId,
+      name: 'Scan test',
+      email: `${userId}@example.com`,
+    });
     await t.test(
       'mocked Google and AI HTTP boundaries run the complete pipeline',
       async () => {
@@ -105,7 +115,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
             });
           },
         );
-        const pipeline = loopScanService(db, {
+        const pipeline = loopScanService(db, userId, {
           source: google,
           detector: ai,
           encryptionKey: key,
@@ -148,7 +158,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
         const id = await newConnection();
         await service.scan(id);
         await resetCooldown(id);
-        await loopScanService(db, {
+        await loopScanService(db, userId, {
           source: {
             recent: async () => ({
               events: [
@@ -193,14 +203,20 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
           .select()
           .from(schema.sourceConnections)
           .where(eq(schema.sourceConnections.id, id));
-        await detachConnection(db, id);
+        await detachConnection(db, userId, id);
         assert.equal(
-          await saveConnection(db, connection.accountEmail, tokens, vault),
+          await saveConnection(
+            db,
+            userId,
+            connection.accountEmail,
+            tokens,
+            vault,
+          ),
           id,
         );
         await resetCooldown(id);
         let called = false;
-        await loopScanService(db, {
+        await loopScanService(db, userId, {
           source,
           detector: {
             detect: async () => {
@@ -276,7 +292,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
         const id = await newConnection();
         await assert.rejects(
           () =>
-            loopScanService(db, {
+            loopScanService(db, userId, {
               source,
               detector: {
                 detect: async () => ({
@@ -305,7 +321,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
           ).length,
           0,
         );
-        await loopScanService(db, {
+        await loopScanService(db, userId, {
           source,
           detector: {
             detect: async (events) => ({
@@ -354,7 +370,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
             skipped: 0,
           }),
         };
-        await loopScanService(db, {
+        await loopScanService(db, userId, {
           source: resolvedSource,
           detector: { detect: async () => ({ candidates: [] }) },
           encryptionKey: key,
@@ -384,7 +400,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
         const paused = new Promise<void>((resolve) => {
           release = resolve;
         });
-        const delayed = loopScanService(db, {
+        const delayed = loopScanService(db, userId, {
           source: {
             recent: async () => {
               start();
@@ -398,7 +414,7 @@ test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and pr
         const running = delayed.scan(id);
         await started;
         await assert.rejects(() => delayed.scan(id), /BUSY/);
-        await detachConnection(db, id);
+        await detachConnection(db, userId, id);
         release();
         await assert.rejects(() => running, /DISCONNECTED/);
         const [connection] = await db
