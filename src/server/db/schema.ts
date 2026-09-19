@@ -11,8 +11,10 @@ import {
   bigint,
   index,
   check,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { statuses } from '../../domain/loops';
+import { candidateStatuses } from '../../domain/scan';
 
 export const loopStatus = pgEnum('loop_status', statuses);
 export const loops = pgTable(
@@ -80,3 +82,122 @@ export const accessLimits = pgTable('access_limits', {
   attempts: integer('attempts').notNull(),
   resetAt: timestamp('reset_at', { withTimezone: true }).notNull(),
 });
+
+export const connectionStatus = pgEnum('source_connection_status', [
+  'CONNECTED',
+  'NEEDS_REAUTH',
+  'DISCONNECTED',
+]);
+export const candidateStatus = pgEnum(
+  'loop_candidate_status',
+  candidateStatuses,
+);
+export const sourceConnections = pgTable(
+  'source_connections',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    provider: text('provider').notNull(),
+    accountId: text('account_id').notNull(),
+    accountEmail: text('account_email').notNull(),
+    status: connectionStatus('status').notNull().default('CONNECTED'),
+    tokenCiphertext: text('token_ciphertext'),
+    metadata: jsonb('metadata')
+      .$type<{ scopes: string[] }>()
+      .notNull()
+      .default({ scopes: [] }),
+    connectedAt: timestamp('connected_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+    lastScanAt: timestamp('last_scan_at', { withTimezone: true }),
+    lastScanCount: integer('last_scan_count').notNull().default(0),
+    lastScanError: text('last_scan_error'),
+    scanLeaseId: uuid('scan_lease_id'),
+    scanLeaseUntil: timestamp('scan_lease_until', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('source_provider_account_unique').on(t.provider, t.accountId),
+  ],
+);
+
+export const externalEvents = pgTable(
+  'external_events',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => sourceConnections.id),
+    provider: text('provider').notNull(),
+    messageId: text('message_id').notNull(),
+    conversationId: text('conversation_id').notNull(),
+    sender: text('sender').notNull(),
+    subject: text('subject').notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    content: text('content').notNull(),
+    dedupeKey: text('dedupe_key').notNull().unique(),
+    metadata: jsonb('metadata')
+      .$type<{
+        direction: 'incoming' | 'outgoing';
+        possibleDates: { date: string; text: string }[];
+      }>()
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('external_connection_conversation_idx').on(
+      t.connectionId,
+      t.conversationId,
+    ),
+  ],
+);
+
+export const loopCandidates = pgTable(
+  'loop_candidates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => sourceConnections.id),
+    conversationId: text('conversation_id').notNull(),
+    dedupeKey: text('dedupe_key').notNull().unique(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    desiredOutcome: text('desired_outcome').notNull(),
+    waitingOn: text('waiting_on').notNull(),
+    expectedBy: date('expected_by'),
+    nextAction: text('next_action'),
+    verificationCondition: text('verification_condition').notNull(),
+    confidence: text('confidence').$type<'MEDIUM' | 'HIGH'>().notNull(),
+    reason: text('reason').notNull(),
+    status: candidateStatus('status').notNull().default('PENDING'),
+    dismissalReason: text('dismissal_reason').$type<'USER' | 'SCAN'>(),
+    sourceReferences: uuid('source_references').array().notNull(),
+    loopId: uuid('loop_id').references(() => loops.id),
+    version: integer('version').notNull().default(1),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index('candidate_status_created_idx').on(t.status, t.createdAt),
+    check(
+      'accepted_candidate_has_loop',
+      sql`(${t.status} IN ('ACCEPTED', 'MERGED')) = (${t.loopId} IS NOT NULL)`,
+    ),
+    check(
+      'candidate_review_confidence',
+      sql`${t.confidence} IN ('MEDIUM', 'HIGH')`,
+    ),
+  ],
+);
+export type SourceConnection = typeof sourceConnections.$inferSelect;
+export type ExternalEvent = typeof externalEvents.$inferSelect;
+export type LoopCandidate = typeof loopCandidates.$inferSelect;

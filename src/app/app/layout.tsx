@@ -14,6 +14,7 @@ export default async function WorkspaceLayout({
         <Brand href="/app" />
         <nav aria-label="Workspace">
           <Link href="/app">Your Loops</Link>
+          <Link href="/app/scan">Loop Scan</Link>
           <Link href="/app/closed">Closed</Link>
         </nav>
         <span className="workspace-label">

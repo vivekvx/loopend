@@ -94,7 +94,9 @@ export default function LandingPage() {
           <span className="cta-note">
             Your workspace starts with manual Loops.
             <br />
-            Connected inboxes and agent follow-ups are the next chapter.
+            Connect Gmail in Loop Scan to review suggested Loops.
+            <br />
+            Automated follow-ups are the next chapter.
           </span>
         </section>
       </main>

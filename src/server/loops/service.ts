@@ -11,7 +11,11 @@ import {
   statusLabels,
 } from '../../domain/loops';
 
-export function loopService(db: PostgresJsDatabase<typeof schema>) {
+export type LoopDatabase = PostgresJsDatabase<typeof schema>;
+export type LoopTransaction = Parameters<
+  Parameters<LoopDatabase['transaction']>[0]
+>[0];
+export function loopService(db: LoopDatabase | LoopTransaction) {
   const { loops, loopEvents } = schema;
   async function locked(
     tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -54,7 +58,10 @@ export function loopService(db: PostgresJsDatabase<typeof schema>) {
         .orderBy(asc(loopEvents.sequence));
       return { loop, events };
     },
-    async create(raw: unknown) {
+    async create(
+      raw: unknown,
+      provenance?: { candidateId: string; sourceReferences: string[] },
+    ) {
       const input = loopInput.parse(raw);
       return db.transaction(async (tx) => {
         const [loop] = await tx
@@ -67,6 +74,14 @@ export function loopService(db: PostgresJsDatabase<typeof schema>) {
           body: 'Loop opened. An outcome worth staying on.',
           payload: { snapshot: input },
         });
+        if (provenance)
+          await tx.insert(loopEvents).values({
+            loopId: loop.id,
+            type: 'source.accepted',
+            source: 'gmail',
+            body: 'You reviewed a Loop Scan suggestion from Gmail and chose to track it.',
+            payload: provenance,
+          });
         return loop;
       });
     },

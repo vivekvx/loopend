@@ -40,6 +40,11 @@ export default defineConfig({
       DATABASE_URL: process.env.TEST_DATABASE_URL,
       APP_PASSWORD: 'test-only-loopend-password',
       SESSION_SECRET: 'test-only-loopend-session-secret-not-for-deployment',
+      GOOGLE_CLIENT_ID: '',
+      GOOGLE_CLIENT_SECRET: '',
+      SOURCE_TOKEN_ENCRYPTION_KEY: '',
+      LOOP_SCAN_AI_API_KEY: '',
+      APP_URL: 'http://127.0.0.1:3100',
     },
   },
 });

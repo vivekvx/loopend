@@ -15,7 +15,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/seed.ts",
-    "test": "tsx --env-file=.env.local --test tests/*.test.ts",
+    "test": "tsx --env-file=.env.local --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@fontsource-variable/newsreader": "^5.3.0",
     "drizzle-orm": "^0.45.2",
     "gsap": "^3.15.0",
+    "html-to-text": "^10.0.1",
     "next": "16.3.5",
     "postgres": "^3.4.9",
     "react": "19.3.0",
@@ -34,6 +35,7 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4.3.3",
+    "@types/html-to-text": "^9.0.4",
     "@types/node": "^26.6.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

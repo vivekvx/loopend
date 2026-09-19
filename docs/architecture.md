@@ -5,6 +5,9 @@ Loopend is a Next.js App Router modular monolith on the Node runtime, with stric
 ## Boundaries
 
 - `src/domain/loops.ts`: schemas, completion invariants, state labels, attention calculation.
+- `src/domain/scan.ts`: provider-neutral detector contract, strict output schema, confidence filtering, source/date grounding, safe errors, scan limits.
+- `src/server/integrations`: Gmail OAuth/API adapter, bounded responses, message normalization, token encryption, connection lifecycle.
+- `src/server/scan`: configuration, AI adapter, orchestration, candidate persistence/promotion, authenticated actions. Network boundaries are injected for tests and future workers.
 - `src/server/db`: lazy pooled PostgreSQL client and Drizzle schema.
 - `src/server/loops/service.ts`: commands and queries, independent of React and Next request APIs. Future ingestion and workers can call this boundary.
 - `src/server/loops/actions.ts`: authenticated Server Actions, boundary validation, safe user errors, revalidation, redirects.
@@ -34,7 +37,45 @@ Heading, navigation, CTA, fallback orbit, fragments, and story copy render immed
 
 ## Extension points
 
-Add provider adapters under `src/server/integrations` when a real integration is built. Normalize external messages into source/actor/payload events and add provider-event deduplication keys before enabling ingestion. The existing service owns Loop transitions. Add a transactional outbox and durable worker when external actions are introduced; never perform network side effects inside database transactions. Model verification evidence and action authority explicitly before allowing an agent to close Loops. These integrations and workers are intentionally not simulated in the initial product.
+Gmail ingestion uses the boundaries below without a separate service, queue, or workflow engine. The existing Loop service still owns Loop transitions. Add a transactional outbox and durable worker when external actions are introduced; never perform network side effects inside database transactions. Model verification evidence and action authority explicitly before allowing an agent to close Loops.
+
+## Loop Scan pipeline
+
+Gmail → External Event → Detector → Candidate → Human approval → Loop
+
+- `source_connections` identifies provider/account and connection status, authenticated encrypted tokens, timestamps, last scan result, and a fenced scan lease. Account identity survives disconnect for stable deduplication.
+- `external_events` normalizes source evidence independently of Gmail UI: provider message/conversation IDs, timestamp, sender, subject, excerpt, metadata, and a unique connection/message hash. Only cited events retain text; other events keep trace identifiers and direction.
+- `loop_candidates` stores structured suggestions, references to external event UUIDs, confidence, status, version, and optional promoted Loop ID. A unique connection/conversation hash prevents duplicates. USER dismissals remain suppressed; SCAN dismissals can be re-evaluated. ACCEPTED/MERGED require a Loop reference.
+
+Scanning acquires a 180-second database lease atomically, with a 30-second cooldown after successful scans. The orchestrator performs network work outside transactions with a 120-second overall timeout, bounded response sizes, request deadlines, and cancellation. It fetches at most 50 unique recent message IDs across bounded pagination (30 days, excluding spam/trash/promotions/social), then normalizes MIME content and skips bulk mail. It does not download attachment bodies through attachment endpoints or crawl entire threads/mailboxes.
+
+The detector receives only normalized useful text and minimal metadata; Gmail identifiers become opaque conversation references. It returns zero or more strict structured objects. The OpenAI-compatible adapter is the only model-provider-specific boundary. Zod rejects unknown fields, invalid structures, arbitrary prose, refusals, and truncation. Application validation checks evidence membership, limits a suggestion to one conversation, discards LOW confidence, and only accepts dates grounded by deterministic extraction. Email content is explicitly treated as untrusted data, never instructions. These safeguards constrain output; they do not guarantee semantic correctness, so human approval is mandatory.
+
+Persistence locks and checks the connection lease before writing events/candidates and finishing the scan. Disconnect/reconnect fences stale writers. Refresh-token updates are also lease-fenced. Successful re-evaluation refreshes or withdraws pending suggestions, but cannot overwrite accepted/ignored decisions. Failed scans preserve prior suggestions and record only a safe error code.
+
+Acceptance locks the candidate, checks status/version/evidence, and calls `loopService(tx).create` inside the same transaction (nested savepoint). Creation and candidate acceptance commit together. The Loop gets `loop.created` and immutable `source.accepted` provenance events. Repeated acceptance returns its existing Loop ID; simultaneous requests cannot create duplicates. No AI output calls the Loop service directly.
+
+### Gmail and AI setup
+
+1. Enable the Gmail API in a Google Cloud project and configure the OAuth consent screen. For testing, add the intended Google account as a test user.
+2. Create a Web application OAuth client. Register exactly `APP_URL/api/gmail/callback` as an authorized redirect URI. Open Loopend using that same origin (`localhost` and `127.0.0.1` are different). Production requires HTTPS.
+3. Set the server-side values in `.env.local` (or your host’s secret manager), restart, enter Loop Scan, connect, then scan.
+
+| Variable                      | Purpose                                                                               |
+| ----------------------------- | ------------------------------------------------------------------------------------- |
+| `APP_URL`                     | Canonical origin, e.g. `http://localhost:3000`; no path or trailing slash             |
+| `GOOGLE_CLIENT_ID`            | Google Web application OAuth client ID                                                |
+| `GOOGLE_CLIENT_SECRET`        | Google OAuth client secret                                                            |
+| `SOURCE_TOKEN_ENCRYPTION_KEY` | 32 random bytes encoded as base64; generate with `openssl rand -base64 32`            |
+| `LOOP_SCAN_AI_API_KEY`        | Configured AI provider credential; absent means a supported setup state               |
+| `LOOP_SCAN_AI_BASE_URL`       | HTTPS OpenAI-compatible API root; defaults to `https://ai-gateway.vercel.sh/v1`       |
+| `LOOP_SCAN_AI_MODEL`          | Structured-output-capable model ID; defaults to `openai/gpt-4.1-mini` for the gateway |
+
+Only `https://www.googleapis.com/auth/gmail.readonly` is requested. Gmail’s profile API supplies account identity; no send/delete/modify or additional profile scopes are needed. OAuth uses PKCE S256 and random state bound to an authenticated, encrypted, HTTP-only, SameSite=Lax cookie with a ten-minute lifetime. The callback requires workspace authentication, validates state/expiry, and consumes the cookie. Tokens are encrypted with AES-256-GCM and account-specific associated data. Changing the encryption key requires reconnecting accounts unless an explicit key-rotation migration is provided. Expired access tokens refresh server-side; revoked grants become NEEDS_REAUTH with local tokens erased.
+
+Normal application logs never contain email bodies, model payloads, tokens, or provider error responses. Configure infrastructure access-log redaction for OAuth callback query parameters as well. Do not expose source tables or token ciphertext through client components. Backups containing source data are sensitive.
+
+Disconnect commits local token removal and lease invalidation before attempting remote revocation. It retains candidates, cited excerpts, Loop provenance, and decision/dedupe metadata, as disclosed in the UI. No automatic retention purge or erase-all UI exists yet. Full HTML, unnecessary raw headers, attachments, and uncited message bodies are not persisted. Review your AI provider’s retention policy and Google API Services User Data Policy before production use. Public distribution with Gmail’s restricted scope may require Google verification and a security assessment; testing-mode refresh grants can expire after seven days. These are deployment prerequisites, not bypassed by the application.
 
 ## Local operation
 
@@ -51,6 +92,8 @@ pnpm dev
 ```
 
 Edit `.env.local` for your database username/password if needed. Use `DATABASE_URL` for the app and a different `TEST_DATABASE_URL` for tests. No production secrets are committed. `pnpm test` applies migrations to the test database; browser tests use that database on a separate production server at port 3100, so run `pnpm build` first. Browser credentials are test-only fixtures and must never be deployed. Test records remain only in the isolated test database.
+
+Scan tests mock the Google and AI HTTP boundaries, not persistence. Real PostgreSQL tests cover deduplication, sticky ignores, invalid output, confidence filtering, lease fencing, and concurrent/repeated promotion. Browser tests cover missing configuration, inspectable evidence, acceptance provenance, ignoring, and callback forgery, alongside the existing lifecycle, auth, graphics fallback, and reduced-motion suite. No automated test needs a Gmail account or paid model call.
 
 ```sh
 pnpm lint

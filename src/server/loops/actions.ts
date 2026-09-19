@@ -16,7 +16,7 @@ function errorState(error: unknown): ActionState {
   if (error instanceof z.ZodError)
     return { error: error.issues.map((issue) => issue.message).join(' ') };
   if (error instanceof DomainError) return { error: error.message };
-  console.error('Loop mutation failed', error);
+  console.error('Loop mutation failed');
   return { error: 'Your change could not be saved. Please try again.' };
 }
 export async function createLoop(

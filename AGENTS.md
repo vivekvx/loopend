@@ -6,6 +6,9 @@
 - All workspace reads and mutations require `requireWorkspace()`. Keep credentials and database access server-side. This is one private workspace, not a multi-tenant app.
 - Validate every command with Zod. Lock the Loop and compare its version before mutations. Append events and update the Loop in the same transaction.
 - Events are append-only. Never rewrite activity history. Only the explicit verification command can close a Loop, from `VERIFYING`, with evidence and confirmation.
+- Detector output is untrusted: validate strict schemas and evidence references. Candidates are not Loops; only human approval may promote one through the existing Loop service in the candidate transaction.
+- Preserve scan leases, provider dedupe keys, sticky human decisions, and idempotent row-locked acceptance. Keep network calls outside database transactions.
+- Gmail is read-only. Encrypt tokens, never log email/model/token payloads, and mock network boundaries in tests. Disconnect must erase local tokens even if remote revocation fails.
 - Use server components by default. Load Three.js and GSAP dynamically; retain static content and reduced-motion support.
 - Use the existing semantic CSS tokens, lowercase brand, accessible labels, visible focus, and quiet editorial layout.
 - Seeds are explicit development commands; never supply fallback UI data when the database fails. Never run tests against the development or production database.
