@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789807003776,
+      "tag": "0000_naive_mach_iv",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789807107372,
+      "tag": "0001_immutable_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789807201410,
+      "tag": "0002_sparkling_morgan_stark",
+      "breakpoints": true
+    }
+  ]
+}
