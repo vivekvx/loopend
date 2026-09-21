@@ -15,7 +15,10 @@ import { loopService } from '../src/server/loops/service';
 import { agentRuntimeService } from '../src/server/agent/service';
 import { agentStore } from '../src/server/agent/store';
 import { ScanError } from '../src/domain/scan';
-import type { AgentEvaluator } from '../src/domain/agent';
+import {
+  AGENT_CONTEXT_MESSAGES,
+  type AgentEvaluator,
+} from '../src/domain/agent';
 
 test('durable monitoring claims safely, observes Gmail evidence, and preserves completion authority', async (t) => {
   const url = process.env.TEST_DATABASE_URL;
@@ -119,11 +122,13 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
   const run = (
     messages: ReturnType<typeof normalizeGmail>[],
     evaluator: AgentEvaluator,
+    runtime: { leaseMs?: number; heartbeatMs?: number } = {},
   ) =>
     agentRuntimeService(db, {
       source: source(messages),
       evaluator,
       encryptionKey: key,
+      ...runtime,
     });
   try {
     await migrate(db, { migrationsFolder: './drizzle' });
@@ -155,6 +160,21 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
       async () => {
         const disabled = await createTracked();
         await isolateDue(disabled.jobId);
+        const transientId = randomUUID();
+        await db.insert(schema.externalEvents).values({
+          id: transientId,
+          userId,
+          connectionId: disabled.connectionId,
+          provider: 'gmail',
+          messageId: `paused-${randomUUID()}`,
+          conversationId: 'agent-thread',
+          sender: 'Temporary sender',
+          subject: 'Temporary subject',
+          occurredAt: new Date(),
+          content: 'Temporary uncited monitoring evidence.',
+          metadata: { direction: 'incoming', possibleDates: [] },
+          dedupeKey: sourceKey(disabled.connectionId, transientId),
+        });
         const record = (await loopService(db, userId).get(disabled.loopId))!
           .loop;
         await loopService(db, userId).configureMonitoring(
@@ -165,6 +185,11 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
             cadenceHours: '24',
           },
         );
+        const [minimized] = await db
+          .select({ content: schema.externalEvents.content })
+          .from(schema.externalEvents)
+          .where(eq(schema.externalEvents.id, transientId));
+        assert.equal(minimized.content, '');
         let calls = 0;
         await run([], {
           evaluate: async () => {
@@ -304,6 +329,267 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
           .where(eq(schema.agentJobs.id, tracked.jobId));
         assert.equal(job.status, 'PENDING');
         assert.ok(job.attempts >= 2);
+      },
+    );
+    await t.test(
+      'heartbeat protects long work from reclaim while a lost holder cannot apply stale results',
+      async () => {
+        const protectedJob = await createTracked();
+        await isolateDue(protectedJob.jobId);
+        const newMessage = normalizeGmail(
+          gmailFixture(
+            `agent-heartbeat-${randomUUID()}`,
+            'agent-thread',
+            'We have completed the refund.',
+          ),
+          'owner@example.com',
+        )!;
+        let entered!: () => void;
+        const evaluating = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const execution = run(
+          [original, newMessage],
+          {
+            evaluate: async (input) => {
+              entered();
+              await held;
+              return {
+                decision: 'STILL_WAITING',
+                rationale: 'The evidence still needs verification.',
+                evidenceReferences: [input.evidence.at(-1)!.id],
+                recommendedNextCheckAt: null,
+                userSummary: 'Loopend will check again later.',
+              };
+            },
+          },
+          { leaseMs: 120, heartbeatMs: 25 },
+        ).runOne();
+        await evaluating;
+        await new Promise((resolve) => setTimeout(resolve, 220));
+        assert.equal(
+          await agentStore(db, { leaseMs: 120 }).claimDue(),
+          null,
+          'a healthy long-running lease must not be reclaimed',
+        );
+        release();
+        await execution;
+
+        const staleJob = await createTracked();
+        await isolateDue(staleJob.jobId);
+        let staleEntered!: () => void;
+        const staleEvaluating = new Promise<void>((resolve) => {
+          staleEntered = resolve;
+        });
+        let staleRelease!: () => void;
+        const staleHeld = new Promise<void>((resolve) => {
+          staleRelease = resolve;
+        });
+        const staleExecution = run(
+          [original, newMessage],
+          {
+            evaluate: async (input) => {
+              staleEntered();
+              await staleHeld;
+              return {
+                decision: 'POSSIBLE_SUCCESS',
+                rationale: 'The refund appears to have completed.',
+                evidenceReferences: [input.evidence.at(-1)!.id],
+                recommendedNextCheckAt: null,
+                userSummary: 'Review the apparent refund completion.',
+              };
+            },
+          },
+          { leaseMs: 120, heartbeatMs: 25 },
+        ).runOne();
+        await staleEvaluating;
+        await db
+          .update(schema.agentJobs)
+          .set({ leaseId: randomUUID(), leaseUntil: new Date(Date.now() - 1) })
+          .where(eq(schema.agentJobs.id, staleJob.jobId));
+        const replacement = await agentStore(db, {
+          leaseMs: 120,
+        }).claimDue();
+        assert.equal(replacement?.job.id, staleJob.jobId);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        staleRelease();
+        await staleExecution;
+        const staleRecord = await loopService(db, userId).get(staleJob.loopId);
+        assert.equal(staleRecord?.loop.status, 'WAITING');
+        assert.equal(
+          staleRecord?.events.some(
+            (event) => event.type === 'agent.possible_outcome_detected',
+          ),
+          false,
+        );
+        await agentStore(db, { leaseMs: 120 }).finishNoop(
+          replacement!.job.id,
+          userId,
+          replacement!.leaseId,
+        );
+      },
+    );
+    await t.test(
+      'persisted maxAttempts controls deterministic exhaustion and is bounded',
+      async () => {
+        const tracked = await createTracked();
+        await isolateDue(tracked.jobId);
+        await db
+          .update(schema.agentJobs)
+          .set({ maxAttempts: 2 })
+          .where(eq(schema.agentJobs.id, tracked.jobId));
+        const first = normalizeGmail(
+          gmailFixture(
+            `agent-attempt-one-${randomUUID()}`,
+            'agent-thread',
+            'We are reviewing the refund.',
+          ),
+          'owner@example.com',
+        )!;
+        await run([original, first], {
+          evaluate: async () => ({ malformed: true }),
+        }).runOne();
+        let [job] = await db
+          .select()
+          .from(schema.agentJobs)
+          .where(eq(schema.agentJobs.id, tracked.jobId));
+        assert.equal(job.status, 'PENDING');
+        assert.equal(job.attempts, 1);
+        await db
+          .update(schema.agentJobs)
+          .set({ runAt: new Date(Date.now() - 1_000) })
+          .where(eq(schema.agentJobs.id, tracked.jobId));
+        const second = normalizeGmail(
+          gmailFixture(
+            `agent-attempt-two-${randomUUID()}`,
+            'agent-thread',
+            'The review is taking longer than expected.',
+          ),
+          'owner@example.com',
+        )!;
+        await run([original, first, second], {
+          evaluate: async () => ({ malformed: true }),
+        }).runOne();
+        [job] = await db
+          .select()
+          .from(schema.agentJobs)
+          .where(eq(schema.agentJobs.id, tracked.jobId));
+        assert.equal(job.attempts, 2);
+        assert.equal(job.status, 'COMPLETED');
+        assert.equal(
+          (await loopService(db, userId).get(tracked.loopId))?.loop.status,
+          'NEEDS_USER',
+        );
+        for (const invalid of [0, 11])
+          await assert.rejects(() =>
+            db.insert(schema.agentJobs).values({
+              userId,
+              loopId: tracked.loopId,
+              generation: 99,
+              idempotencyKey: randomUUID(),
+              runAt: new Date(),
+              maxAttempts: invalid,
+            }),
+          );
+      },
+    );
+    await t.test(
+      'long conversations retain trace identity but only cited and provenance evidence text',
+      async () => {
+        const tracked = await createTracked();
+        await isolateDue(tracked.jobId);
+        const bulk = Array.from({ length: 25 }, (_, index) => {
+          const raw = gmailFixture(
+            `agent-bulk-${index}-${randomUUID()}`,
+            'agent-thread',
+            `Conversation update ${index}: refund review evidence.`,
+          );
+          raw.internalDate = String(Date.now() + (index + 1) * 1_000);
+          return normalizeGmail(raw, 'owner@example.com')!;
+        });
+        let evaluatorCount = 0;
+        let citedId = '';
+        let evaluationStarted!: () => void;
+        const activeEvaluation = new Promise<void>((resolve) => {
+          evaluationStarted = resolve;
+        });
+        let finishEvaluation!: () => void;
+        const evaluationHeld = new Promise<void>((resolve) => {
+          finishEvaluation = resolve;
+        });
+        const execution = run([original, ...bulk], {
+          evaluate: async (input) => {
+            evaluatorCount = input.evidence.length;
+            citedId = input.evidence.at(-1)!.id;
+            evaluationStarted();
+            await evaluationHeld;
+            return {
+              decision: 'POSSIBLE_SUCCESS',
+              rationale: 'The latest message contains completion evidence.',
+              evidenceReferences: [citedId],
+              recommendedNextCheckAt: null,
+              userSummary: 'Review the latest completion evidence.',
+            };
+          },
+        }).runOne();
+        await activeEvaluation;
+        const scanning = scanStore(db, userId);
+        const { lease } = await scanning.acquire(tracked.connectionId);
+        const prepared = await scanning.prepare(tracked.connectionId, [
+          original,
+        ]);
+        await scanning.persist(tracked.connectionId, lease, prepared, [], 1);
+        const [activeExcerpt] = await db
+          .select({ content: schema.externalEvents.content })
+          .from(schema.externalEvents)
+          .where(
+            and(
+              eq(schema.externalEvents.connectionId, tracked.connectionId),
+              eq(schema.externalEvents.messageId, bulk.at(-1)!.messageId),
+            ),
+          );
+        assert.ok(
+          activeExcerpt.content,
+          'scan cleanup must not erase an in-flight evaluation window',
+        );
+        finishEvaluation();
+        await execution;
+        assert.ok(evaluatorCount <= AGENT_CONTEXT_MESSAGES + 1);
+        const stored = await db
+          .select()
+          .from(schema.externalEvents)
+          .where(
+            and(
+              eq(schema.externalEvents.connectionId, tracked.connectionId),
+              eq(schema.externalEvents.conversationId, 'agent-thread'),
+            ),
+          );
+        assert.equal(stored.length, 26);
+        assert.equal(
+          stored.filter((event) => event.content.length > 0).length,
+          2,
+          'only accepted provenance and cited evidence retain excerpts',
+        );
+        const minimized = stored.find((event) =>
+          event.messageId.startsWith('agent-bulk-0-'),
+        );
+        assert.equal(minimized?.content, '');
+        assert.equal(minimized?.sender, '');
+        assert.equal(minimized?.subject, '');
+        assert.ok(minimized?.dedupeKey);
+        const record = await loopService(db, userId).get(tracked.loopId);
+        assert.equal(
+          record?.evidence.some((item) => item.id === citedId),
+          true,
+        );
+        assert.ok(
+          record?.evidence.find((item) => item.id === citedId)?.content,
+          'cited evidence remains inspectable',
+        );
       },
     );
     await t.test(
