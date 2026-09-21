@@ -71,6 +71,13 @@
       "when": 1789880707803,
       "tag": "0009_bouncy_terror",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789963315850,
+      "tag": "0010_common_slapstick",
+      "breakpoints": true
     }
   ]
 }

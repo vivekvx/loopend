@@ -19,6 +19,7 @@ import { user } from './auth-schema';
 export * from './auth-schema';
 import { statuses } from '../../domain/loops';
 import { candidateStatuses } from '../../domain/scan';
+import { DEFAULT_AGENT_MAX_ATTEMPTS } from '../../domain/agent';
 
 export const loopStatus = pgEnum('loop_status', statuses);
 export const monitoringSource = pgEnum('monitoring_source', [
@@ -299,7 +300,9 @@ export const agentJobs = pgTable(
     status: agentJobStatus('status').notNull().default('PENDING'),
     runAt: timestamp('run_at', { withTimezone: true }).notNull(),
     attempts: integer('attempts').notNull().default(0),
-    maxAttempts: integer('max_attempts').notNull().default(5),
+    maxAttempts: integer('max_attempts')
+      .notNull()
+      .default(DEFAULT_AGENT_MAX_ATTEMPTS),
     leaseId: uuid('lease_id'),
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
     lastError: text('last_error'),
@@ -319,6 +322,10 @@ export const agentJobs = pgTable(
     }),
     index('agent_jobs_due_idx').on(t.status, t.runAt),
     index('agent_jobs_owner_loop_idx').on(t.userId, t.loopId),
+    check(
+      'agent_jobs_max_attempts_range',
+      sql`${t.maxAttempts} BETWEEN 1 AND 10`,
+    ),
   ],
 );
 export type AgentJob = typeof agentJobs.$inferSelect;

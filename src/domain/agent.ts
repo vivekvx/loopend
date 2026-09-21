@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+export const DEFAULT_AGENT_MAX_ATTEMPTS = 5;
+export const agentMaxAttempts = z.number().int().min(1).max(10);
+export const AGENT_CONTEXT_MESSAGES = 12;
+
 export const agentDecisions = [
   'STILL_WAITING',
   'POSSIBLE_SUCCESS',
