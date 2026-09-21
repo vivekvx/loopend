@@ -27,7 +27,7 @@ Active states may move between each other as the situation changes. CLOSED is ex
 
 ## Product honesty
 
-The landing page tells the intended completion-agent story. Its CTA leads to account creation (or the dashboard for an authenticated user). Loop Scan connects Gmail and suggests unfinished situations for review. Calendar/browser ingestion, scheduled follow-up, autonomous action, and external verification are not implemented. Evidence for closing a Loop is user-attested text, not independently verified by an agent.
+The landing page tells the intended completion-agent story. Its CTA leads to account creation (or the dashboard for an authenticated user). Loop Scan connects Gmail and suggests unfinished situations for review. Gmail-originated Loops can be monitored: Loopend wakes at a conservative scheduled time, reads only their linked conversation, and records an observation. It can move a likely completed outcome to VERIFYING, or ask for help when the evidence is unclear. It never sends email, performs browser actions, buys anything, or closes a Loop. Evidence for closing a Loop is still user-attested text, not independently verified by an agent.
 
 The visual system uses an incomplete rust-red circle, warm paper, Manrope for readable UI, and Newsreader for editorial emphasis. A closed circle and muted green indicate completion. Typography is self-hosted. Animation explains the same refund from scattered context to verified bank credit; all story text is server-rendered.
 
@@ -42,6 +42,12 @@ Suggestions focus on concrete pending outcomes: promised refunds, documents, sup
 “Track this” creates an OPEN Loop with Gmail/Loop Scan provenance in its activity timeline. Repeated or concurrent approval returns the same Loop. “Ignore” permanently suppresses that conversation for the connected account, including after reconnecting. This first version allows one candidate per conversation; MERGED is reserved for a future explicit merge flow. There is no automatic promotion, completion, or follow-up.
 
 A later successful scan may refresh or withdraw an unreviewed suggestion when its evidence changes. Explicit human decisions always win. Scans never update existing real Loops. Pending suggestions outside the bounded window are not re-evaluated. The scan is not a complete mailbox audit: earlier or omitted replies may change the interpretation. Review the evidence before tracking. Dates come from explicit dates or numeric day windows; vague dates remain unset. Business-day windows exclude weekends, not holidays.
+
+## Monitoring
+
+Gmail Loops accepted from Loop Scan retain their source conversation. From the Loop detail page, choose **Enable monitoring**, a cadence of one day, three days, or a week, and an optional first check. An expected date pushes the first automatic check until after that window. Monitoring is **OBSERVE_ONLY**: it reads the one linked Gmail conversation and never sends or modifies mail.
+
+Loopend records a short observation in the immutable timeline. No new evidence leaves the Loop in WAITING and schedules a later check. Plausible evidence of the outcome moves it to VERIFYING with an inspectable excerpt; only the user can then verify and close it. A disconnected account, ambiguous evidence, or repeated safe failures moves it to NEEDS_USER. Pausing monitoring cancels its future wake-up. Background checks are conservative and do not scan the mailbox.
 
 ### Privacy and disconnect
 

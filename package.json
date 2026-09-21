@@ -16,6 +16,8 @@
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/seed.ts",
     "db:claim-legacy": "tsx --env-file=.env.local scripts/claim-legacy.ts",
+    "worker": "tsx --env-file=.env.local scripts/agent-worker.ts",
+    "worker:once": "LOOPEND_WORKER_ONCE=1 tsx --env-file=.env.local scripts/agent-worker.ts",
     "test": "tsx --env-file=.env.local --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test"
   },

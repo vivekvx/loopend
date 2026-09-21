@@ -57,6 +57,20 @@
       "when": 1789842469708,
       "tag": "0007_shallow_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789880676749,
+      "tag": "0008_fluffy_ghost_rider",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789880707803,
+      "tag": "0009_bouncy_terror",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,7 @@ import { formatDate } from '@/domain/loops';
 import { LoopStatusLabel } from '@/components/loop-status';
 import { LoopMark } from '@/components/brand';
 import { ActivityForm, CompletionForm } from '@/components/activity-form';
+import { MonitoringPanel } from '@/components/monitoring-panel';
 export default async function LoopDetail({
   params,
 }: {
@@ -15,7 +16,7 @@ export default async function LoopDetail({
   if (!z.uuid().safeParse(id).success) notFound();
   const record = await (await workspaceQueries()).get(id);
   if (!record) notFound();
-  const { loop, events } = record;
+  const { loop, events, evidence } = record;
   return (
     <main id="main" className="detail-main">
       <Link className="back-link" href="/app">
@@ -56,6 +57,7 @@ export default async function LoopDetail({
               <dd>{loop.verificationCondition}</dd>
             </div>
           </dl>
+          <MonitoringPanel loop={loop} />
           {loop.status !== 'CLOSED' && (
             <Link
               href={`/app/loops/${id}/edit`}
@@ -65,11 +67,27 @@ export default async function LoopDetail({
             </Link>
           )}
           {loop.status === 'VERIFYING' && (
-            <CompletionForm
-              id={id}
-              version={loop.version}
-              condition={loop.verificationCondition}
-            />
+            <>
+              {evidence.length > 0 && (
+                <details className="evidence-review">
+                  <summary>Review the evidence Loopend found</summary>
+                  {evidence.map((item) => (
+                    <article key={item.id}>
+                      <strong>{item.subject || 'Gmail message'}</strong>
+                      <span>
+                        {item.sender} · {formatDate(item.occurredAt)}
+                      </span>
+                      <p>{item.content || 'Message metadata only'}</p>
+                    </article>
+                  ))}
+                </details>
+              )}
+              <CompletionForm
+                id={id}
+                version={loop.version}
+                condition={loop.verificationCondition}
+              />
+            </>
           )}
           {loop.status !== 'CLOSED' && loop.status !== 'VERIFYING' && (
             <p className="completion-note">

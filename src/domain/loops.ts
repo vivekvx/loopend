@@ -9,6 +9,10 @@ export const activeStatuses = [
 ] as const;
 export const statuses = [...activeStatuses, 'CLOSED'] as const;
 export type LoopStatus = (typeof statuses)[number];
+export const monitoringSources = ['MANUAL', 'GMAIL_CONVERSATION'] as const;
+export type MonitoringSource = (typeof monitoringSources)[number];
+export const monitoringModes = ['OBSERVE_ONLY'] as const;
+export type MonitoringMode = (typeof monitoringModes)[number];
 export const statusLabels: Record<LoopStatus, string> = {
   OPEN: 'Open',
   WAITING: 'Waiting',
@@ -63,6 +67,24 @@ export const completionInput = z.object({
   confirmed: z.literal(true, {
     error: 'Confirm that the verification condition has been met.',
   }),
+});
+export const monitoringInput = z.object({
+  enabled: z.enum(['true', 'false']).transform((value) => value === 'true'),
+  cadenceHours: z.coerce
+    .number()
+    .int()
+    .min(12)
+    .max(24 * 30),
+  nextCheckAt: z
+    .string()
+    .trim()
+    .max(40)
+    .optional()
+    .transform((value) => (value ? value : null))
+    .refine(
+      (value) => !value || !Number.isNaN(new Date(value).getTime()),
+      'Choose a valid next check time.',
+    ),
 });
 export class DomainError extends Error {}
 export function assertEditable(status: LoopStatus) {

@@ -1,0 +1,1 @@
+ALTER TABLE "loops" ADD CONSTRAINT "enabled_monitoring_has_gmail_source" CHECK (NOT "loops"."monitoring_enabled" OR ("loops"."monitoring_source" = 'GMAIL_CONVERSATION' AND "loops"."monitoring_connection_id" IS NOT NULL AND "loops"."monitoring_conversation_id" IS NOT NULL));

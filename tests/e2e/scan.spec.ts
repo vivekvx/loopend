@@ -146,6 +146,7 @@ test('source evidence is inspectable and Track this creates a provenance-linked 
   const candidate = await seedSuggestion(
     identity.id,
     `A refund to review ${testInfo.project.name} ${Date.now()}`,
+    true,
   );
   await page.goto('/app/scan');
   const card = page
@@ -174,6 +175,16 @@ test('source evidence is inspectable and Track this creates a provenance-linked 
     ),
   ).toBeVisible();
   await expect(page.locator('.detail-header .status')).toHaveText('Open');
+  await expect(
+    page.getByRole('heading', { name: 'Quiet until you ask.' }),
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Enable monitoring' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Loopend is keeping watch.' }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Gmail conversation', { exact: true }),
+  ).toBeVisible();
   await page.goto('/app/scan');
   await expect(
     page.getByRole('heading', { name: candidate.title }),

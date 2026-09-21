@@ -24,6 +24,13 @@ export type MailSource = {
     onRefresh: (tokens: GoogleTokens) => Promise<void>,
     signal: AbortSignal,
   ): Promise<{ events: NormalizedEmail[]; fetched: number; skipped: number }>;
+  conversation?(
+    tokens: GoogleTokens,
+    account: string,
+    conversationId: string,
+    onRefresh: (tokens: GoogleTokens) => Promise<void>,
+    signal: AbortSignal,
+  ): Promise<NormalizedEmail[]>;
 };
 
 export function gmailClient(config: GmailConfig, fetcher: Fetcher = fetch) {
@@ -219,6 +226,59 @@ export function gmailClient(config: GmailConfig, fetcher: Fetcher = fetch) {
         else skipped++;
       }
       return { events, fetched: ids.size, skipped };
+    },
+    async conversation(
+      initial: GoogleTokens,
+      account: string,
+      conversationId: string,
+      onRefresh: (tokens: GoogleTokens) => Promise<void>,
+      signal: AbortSignal,
+    ) {
+      if (!/^[\w-]+$/.test(conversationId)) throw new ScanError('GMAIL_API');
+      let tokens = initial;
+      async function refresh() {
+        const next = await tokenRequest(
+          { refresh_token: tokens.refreshToken, grant_type: 'refresh_token' },
+          signal,
+        );
+        tokens = {
+          accessToken: next.access_token,
+          refreshToken: next.refresh_token ?? tokens.refreshToken,
+          expiresAt: Date.now() + next.expires_in * 1000,
+        };
+        await onRefresh(tokens);
+      }
+      async function fetchThread() {
+        if (tokens.expiresAt <= Date.now() + 60_000) await refresh();
+        let response = await request(
+          `${API}/threads/${encodeURIComponent(conversationId)}?format=full`,
+          { headers: { Authorization: `Bearer ${tokens.accessToken}` } },
+          signal,
+        );
+        if (response.status === 401) {
+          await refresh();
+          response = await request(
+            `${API}/threads/${encodeURIComponent(conversationId)}?format=full`,
+            { headers: { Authorization: `Bearer ${tokens.accessToken}` } },
+            signal,
+          );
+        }
+        if (response.status === 401) throw new ScanError('GMAIL_AUTH');
+        if (response.status === 404) return null;
+        if (!response.ok) throw new ScanError('GMAIL_API');
+        return boundedJson(response, 'GMAIL_API');
+      }
+      const raw = await fetchThread();
+      if (!raw) return [];
+      const parsed = z
+        .object({ messages: z.array(z.unknown()).max(100) })
+        .safeParse(raw);
+      if (!parsed.success) throw new ScanError('GMAIL_API');
+      return parsed.data.messages
+        .map((message) => normalizeGmail(message, account))
+        .filter((message): message is NormalizedEmail => message !== null)
+        .filter((message) => message.conversationId === conversationId)
+        .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
     },
     async revoke(token: string) {
       const response = await request('https://oauth2.googleapis.com/revoke', {

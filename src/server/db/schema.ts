@@ -6,6 +6,7 @@ import {
   text,
   timestamp,
   date,
+  boolean,
   integer,
   jsonb,
   bigint,
@@ -20,6 +21,18 @@ import { statuses } from '../../domain/loops';
 import { candidateStatuses } from '../../domain/scan';
 
 export const loopStatus = pgEnum('loop_status', statuses);
+export const monitoringSource = pgEnum('monitoring_source', [
+  'MANUAL',
+  'GMAIL_CONVERSATION',
+]);
+export const monitoringMode = pgEnum('monitoring_mode', ['OBSERVE_ONLY']);
+export const agentJobStatus = pgEnum('agent_job_status', [
+  'PENDING',
+  'RUNNING',
+  'COMPLETED',
+  'FAILED',
+  'CANCELLED',
+]);
 export const loops = pgTable(
   'loops',
   {
@@ -35,6 +48,26 @@ export const loops = pgTable(
     expectedBy: date('expected_by'),
     nextAction: text('next_action').notNull().default(''),
     verificationCondition: text('verification_condition').notNull(),
+    monitoringEnabled: boolean('monitoring_enabled').notNull().default(false),
+    monitoringSource: monitoringSource('monitoring_source')
+      .notNull()
+      .default('MANUAL'),
+    monitoringMode: monitoringMode('monitoring_mode')
+      .notNull()
+      .default('OBSERVE_ONLY'),
+    monitoringConnectionId: uuid('monitoring_connection_id'),
+    monitoringConversationId: text('monitoring_conversation_id'),
+    monitoringCadenceHours: integer('monitoring_cadence_hours')
+      .notNull()
+      .default(72),
+    monitoringNextCheckAt: timestamp('monitoring_next_check_at', {
+      withTimezone: true,
+    }),
+    monitoringLastCheckAt: timestamp('monitoring_last_check_at', {
+      withTimezone: true,
+    }),
+    monitoringLastObservation: text('monitoring_last_observation'),
+    monitoringGeneration: integer('monitoring_generation').notNull().default(0),
     version: integer('version').notNull().default(1),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -51,6 +84,10 @@ export const loops = pgTable(
     check(
       'closed_timestamp_matches_state',
       sql`(${t.status} = 'CLOSED') = (${t.closedAt} IS NOT NULL)`,
+    ),
+    check(
+      'enabled_monitoring_has_gmail_source',
+      sql`NOT ${t.monitoringEnabled} OR (${t.monitoringSource} = 'GMAIL_CONVERSATION' AND ${t.monitoringConnectionId} IS NOT NULL AND ${t.monitoringConversationId} IS NOT NULL)`,
     ),
   ],
 );
@@ -245,3 +282,43 @@ export const loopCandidates = pgTable(
 export type SourceConnection = typeof sourceConnections.$inferSelect;
 export type ExternalEvent = typeof externalEvents.$inferSelect;
 export type LoopCandidate = typeof loopCandidates.$inferSelect;
+
+export const agentJobs = pgTable(
+  'agent_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id),
+    loopId: uuid('loop_id')
+      .notNull()
+      .references(() => loops.id, { onDelete: 'restrict' }),
+    generation: integer('generation').notNull(),
+    kind: text('kind').notNull().default('OBSERVE_GMAIL_CONVERSATION'),
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+    status: agentJobStatus('status').notNull().default('PENDING'),
+    runAt: timestamp('run_at', { withTimezone: true }).notNull(),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(5),
+    leaseId: uuid('lease_id'),
+    leaseUntil: timestamp('lease_until', { withTimezone: true }),
+    lastError: text('last_error'),
+    resultAppliedAt: timestamp('result_applied_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    foreignKey({
+      name: 'agent_job_loop_owner_fk',
+      columns: [t.loopId, t.userId],
+      foreignColumns: [loops.id, loops.userId],
+    }),
+    index('agent_jobs_due_idx').on(t.status, t.runAt),
+    index('agent_jobs_owner_loop_idx').on(t.userId, t.loopId),
+  ],
+);
+export type AgentJob = typeof agentJobs.$inferSelect;

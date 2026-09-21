@@ -991,6 +991,119 @@ textarea::placeholder {
   font-size: 11px;
   color: var(--muted);
 }
+.monitoring-panel {
+  margin-top: 38px;
+  padding: 24px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.monitoring-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+.monitoring-heading h2 {
+  font-family: var(--font-editorial);
+  font-size: 25px;
+  font-weight: 400;
+  margin: 8px 0 0;
+}
+.monitoring-live,
+.monitoring-paused {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 8px;
+  border-radius: 20px;
+  background: #eaece2;
+  color: var(--success);
+}
+.monitoring-paused {
+  background: #ece9e1;
+  color: var(--muted);
+}
+.monitoring-panel > p {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--muted);
+  margin: 15px 0 0;
+}
+.monitoring-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 20px 0;
+}
+.monitoring-facts dt,
+.monitoring-observation span {
+  display: block;
+  font-size: 9px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+.monitoring-facts dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.monitoring-observation {
+  padding-left: 12px;
+  border-left: 2px solid #b6b9ab;
+  white-space: pre-wrap;
+}
+.monitoring-form {
+  margin-top: 20px;
+}
+.monitoring-pause-form {
+  margin-top: 14px;
+}
+.monitoring-controls {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+.monitoring-controls label {
+  display: grid;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.monitoring-controls select,
+.monitoring-controls input {
+  width: 100%;
+}
+.monitoring-message {
+  font-size: 11px;
+  color: var(--success);
+  margin-top: 12px;
+}
+.evidence-review {
+  margin-top: 28px;
+  padding: 16px;
+  background: #ece9e1;
+  font-size: 11px;
+}
+.evidence-review summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+.evidence-review article {
+  border-top: 1px solid var(--line);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.evidence-review article span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  margin-top: 4px;
+}
+.evidence-review article p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+}
 .completion-panel {
   padding: 25px;
   background: #eaece2;
@@ -1477,6 +1590,9 @@ textarea::placeholder {
   }
   .completion-panel {
     padding: 20px;
+  }
+  .monitoring-controls {
+    grid-template-columns: 1fr;
   }
   .desktop-break {
     display: none;

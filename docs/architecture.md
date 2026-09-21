@@ -1,6 +1,6 @@
 # Architecture
 
-Loopend is a Next.js App Router modular monolith on the Node runtime, with strict TypeScript, Tailwind CSS, PostgreSQL, Drizzle, and Zod. No separate API service or worker is needed for the current product.
+Loopend is a Next.js App Router modular monolith on the Node runtime, with strict TypeScript, Tailwind CSS, PostgreSQL, Drizzle, and Zod. The web app and durable worker are two entry points into the same codebase and database; there is no separate service boundary.
 
 ## Boundaries
 
@@ -9,7 +9,8 @@ Loopend is a Next.js App Router modular monolith on the Node runtime, with stric
 - `src/server/integrations`: Gmail OAuth/API adapter, bounded responses, message normalization, token encryption, connection lifecycle.
 - `src/server/scan`: configuration, AI adapter, orchestration, candidate persistence/promotion, authenticated actions. Network boundaries are injected for tests and future workers.
 - `src/server/db`: lazy pooled PostgreSQL client and Drizzle schema.
-- `src/server/loops/service.ts`: commands and queries, independent of React and Next request APIs. Future ingestion and workers can call this boundary.
+- `src/server/loops/service.ts`: commands and queries, independent of React and Next request APIs. It owns user and agent Loop transitions, event history, monitoring policy, and scheduling commands.
+- `src/server/agent`: durable-job claim/store, provider-neutral structured evaluator, and worker orchestration. It has no HTTP endpoint.
 - `src/server/loops/actions.ts`: authenticated Server Actions, boundary validation, safe user errors, revalidation, redirects.
 - `src/server/auth.ts` and `src/server/auth/config.ts`: lazy Better Auth instance and database-validated session boundary; no custom password hashing/session signing.
 - `src/app`: server-rendered routes; small form components handle pending and validation states.
@@ -71,9 +72,30 @@ Local development also requires signup. Optional `pnpm db:seed <user-id>` create
 
 Heading, navigation, CTA, fallback orbit, fragments, and story copy render immediately. A narrow client component checks `prefers-reduced-motion` before importing the graphics chunk. Three.js `WebGPURenderer` initializes WebGPU and automatically uses its built-in WebGL2 backend if WebGPU is unavailable. If neither backend initializes, the CSS orbit remains. A live preference change disposes animation resources. GSAP ScrollTrigger organizes fragments, advances story state, and closes the diagram circle through scrolling. Offscreen/hidden hero frames are skipped. Cleanup disposes geometry, materials, renderer, observers, and ScrollTriggers.
 
+## Durable monitoring runtime
+
+Loop → monitoring policy → durable scheduled job → worker claim → source observation → structured evaluation → Loop transition → reschedule or wait for user
+
+`loops` stores the monitoring policy: enabled flag, source type, OBSERVE_ONLY action mode, Gmail connection/conversation, cadence, next/last check, latest user-facing observation, and a monotonic monitoring generation. Gmail provenance is copied from an accepted candidate to the Loop while monitoring is paused, so a later enable operation can prove the source belongs to the same user.
+
+`agent_jobs` is PostgreSQL-backed and owns wake-ups. A worker claims one due job in a short transaction with `FOR UPDATE SKIP LOCKED`, assigns a 90-second lease, and increments its attempt counter. Jobs carry the owner, Loop, monitoring generation, run time, idempotency key, lease, and result marker. A crash leaves the job reclaimable after its lease. Result application locks the job and Loop together, confirms the lease, owner, generation, enabled policy, and compatible state, then writes the immutable observation, Loop state, next job, and completed result marker in one transaction. Duplicate delivery therefore cannot apply an observation twice; a changed policy generation cancels stale work.
+
+The worker does not hold a database transaction while decrypting a token, fetching Gmail, refreshing a token, or calling the evaluator. It asks Gmail only for `threads/{linked conversation}`; it never runs a mailbox scan for a scheduled Loop. New normalized messages are deduplicated as source events before semantic evaluation. The evaluator receives only Loop outcome/verification context, existing conversation evidence, new evidence, and the previous short observation. Its strict Zod output is validated against persisted evidence IDs before service application.
+
+Deterministic handling comes first: disabled, closed, stale, and incompatible jobs cancel; a future expected window is deferred; no new message reschedules without an AI call; disconnected or revoked Gmail moves the Loop to NEEDS_USER. Semantic decisions map to WAITING, VERIFYING, or NEEDS_USER. No agent path can write CLOSED. Temporary source/model/storage failures retry with 30-second exponential backoff capped at one hour and five attempts. A permanent Gmail auth failure stops retries, clears the encrypted token through the existing connection status path, and surfaces NEEDS_USER. Repeated failures likewise surface NEEDS_USER with audit history.
+
+Run the worker separately from the web process:
+
+```sh
+pnpm dev
+pnpm worker
+```
+
+`pnpm worker:once` claims and drains a small local batch then exits. Deploy one or more worker processes with the same database and server-only Gmail/AI environment variables; lease locking makes concurrent workers safe. There is intentionally no public worker route or in-memory timer.
+
 ## Extension points
 
-Gmail ingestion uses the boundaries below without a separate service, queue, or workflow engine. The existing Loop service still owns Loop transitions. Add a transactional outbox and durable worker when external actions are introduced; never perform network side effects inside database transactions. Model verification evidence and action authority explicitly before allowing an agent to close Loops.
+Gmail ingestion uses the boundaries below without a separate service, queue, or workflow engine. The existing Loop service still owns Loop transitions. Future action modes must model authority and verification evidence explicitly; they must not reuse OBSERVE_ONLY as permission to perform external side effects.
 
 ## Loop Scan pipeline
 

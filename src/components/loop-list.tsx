@@ -14,11 +14,13 @@ export function LoopList({ loops, empty }: { loops: Loop[]; empty: string }) {
             <div className="loop-row-copy">
               <h3>{loop.title}</h3>
               <p>
-                {loop.status === 'CLOSED'
-                  ? loop.desiredOutcome
-                  : loop.waitingOn
-                    ? `Waiting on ${loop.waitingOn}`
-                    : loop.desiredOutcome}
+                {loop.monitoringEnabled && loop.status !== 'CLOSED'
+                  ? `Loopend is watching · ${loop.waitingOn || loop.desiredOutcome}`
+                  : loop.status === 'CLOSED'
+                    ? loop.desiredOutcome
+                    : loop.waitingOn
+                      ? `Waiting on ${loop.waitingOn}`
+                      : loop.desiredOutcome}
               </p>
             </div>
             <div className="loop-row-meta">

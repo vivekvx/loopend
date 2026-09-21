@@ -33,6 +33,7 @@ test('real accounts, sessions, ownership constraints, and tenant isolation', asy
     origin,
     secure: true,
   });
+  const testIp = `192.0.2.${Math.floor(Math.random() * 200) + 1}`;
   const request = (
     path: string,
     body?: unknown,
@@ -46,7 +47,7 @@ test('real accounts, sessions, ownership constraints, and tenant isolation', asy
           'Content-Type': 'application/json',
           Origin: requestOrigin,
           Cookie: cookie,
-          'x-forwarded-for': '192.0.2.32',
+          'x-forwarded-for': testIp,
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       }),
