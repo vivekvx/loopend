@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, ne, notInArray, sql } from 'drizzle-orm';
 import { assertUserId } from '../../domain/ownership';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import * as schema from '../db/schema';
@@ -12,7 +12,11 @@ import {
   monitoringInput,
   statusLabels,
 } from '../../domain/loops';
-import { type AgentDecision } from '../../domain/agent';
+import {
+  DEFAULT_AGENT_MAX_ATTEMPTS,
+  agentMaxAttempts,
+  type AgentDecision,
+} from '../../domain/agent';
 
 export type LoopDatabase = PostgresJsDatabase<typeof schema>;
 export type LoopTransaction = Parameters<
@@ -37,6 +41,58 @@ export function loopService(
         'This Loop changed in another window. Refresh the page and try again.',
       );
     return loop;
+  }
+  async function minimizeConversationEvidence(
+    tx: LoopTransaction,
+    loop: schema.Loop,
+  ) {
+    if (!loop.monitoringConnectionId || !loop.monitoringConversationId) return;
+    const candidates = await tx
+      .select({ refs: schema.loopCandidates.sourceReferences })
+      .from(schema.loopCandidates)
+      .where(
+        and(
+          eq(schema.loopCandidates.userId, userId),
+          eq(schema.loopCandidates.loopId, loop.id),
+          inArray(schema.loopCandidates.status, ['ACCEPTED', 'MERGED']),
+        ),
+      );
+    const history = await tx
+      .select({ payload: loopEvents.payload })
+      .from(loopEvents)
+      .where(eq(loopEvents.loopId, loop.id));
+    const retainedEvidence = [
+      ...new Set([
+        ...candidates.flatMap((candidate) => candidate.refs),
+        ...history.flatMap(({ payload }) => {
+          const refs = payload.evidenceReferences;
+          return Array.isArray(refs)
+            ? refs.filter((value): value is string => typeof value === 'string')
+            : [];
+        }),
+      ]),
+    ];
+    await tx
+      .update(schema.externalEvents)
+      .set({
+        content: '',
+        subject: '',
+        sender: '',
+        metadata: sql`jsonb_build_object('direction', ${schema.externalEvents.metadata}->>'direction', 'possibleDates', '[]'::jsonb)`,
+      })
+      .where(
+        and(
+          eq(schema.externalEvents.userId, userId),
+          eq(schema.externalEvents.connectionId, loop.monitoringConnectionId),
+          eq(
+            schema.externalEvents.conversationId,
+            loop.monitoringConversationId,
+          ),
+          retainedEvidence.length
+            ? notInArray(schema.externalEvents.id, retainedEvidence)
+            : undefined,
+        ),
+      );
   }
   return {
     async list() {
@@ -249,6 +305,7 @@ export function loopService(
               inArray(schema.agentJobs.status, ['PENDING', 'RUNNING']),
             ),
           );
+        await minimizeConversationEvidence(tx, loop);
         if (!input.enabled) {
           await tx
             .update(loops)
@@ -345,6 +402,7 @@ export function loopService(
           userId,
           loopId: id,
           generation,
+          maxAttempts: agentMaxAttempts.parse(DEFAULT_AGENT_MAX_ATTEMPTS),
           idempotencyKey: `${id}:${generation}:${next.toISOString()}`,
           runAt: next,
         });
@@ -440,6 +498,27 @@ export function loopService(
             : input.decision === 'NEEDS_USER' || input.decision === 'UNKNOWN'
               ? 'agent.needs_user'
               : 'agent.observed';
+        if (input.evidenceReferences.length) {
+          const sources = await tx
+            .select({ id: schema.externalEvents.id })
+            .from(schema.externalEvents)
+            .where(
+              and(
+                eq(schema.externalEvents.userId, userId),
+                eq(
+                  schema.externalEvents.connectionId,
+                  loop.monitoringConnectionId!,
+                ),
+                eq(
+                  schema.externalEvents.conversationId,
+                  loop.monitoringConversationId!,
+                ),
+                inArray(schema.externalEvents.id, input.evidenceReferences),
+              ),
+            );
+          if (sources.length !== new Set(input.evidenceReferences).size)
+            return false;
+        }
         await tx.insert(loopEvents).values({
           loopId: loop.id,
           type,
@@ -463,6 +542,7 @@ export function loopService(
               userId,
               loopId: loop.id,
               generation: loop.monitoringGeneration,
+              maxAttempts: agentMaxAttempts.parse(DEFAULT_AGENT_MAX_ATTEMPTS),
               idempotencyKey: `${loop.id}:${loop.monitoringGeneration}:${scheduled.toISOString()}`,
               runAt: scheduled,
             })
@@ -478,6 +558,7 @@ export function loopService(
               payload: { nextCheckAt: scheduled.toISOString() },
             });
         }
+        await minimizeConversationEvidence(tx, loop);
         await tx
           .update(loops)
           .set({

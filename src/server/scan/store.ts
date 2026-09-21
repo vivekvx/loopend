@@ -20,6 +20,9 @@ import {
   sourceConnections,
   externalEvents,
   loopCandidates,
+  loopEvents,
+  loops,
+  agentJobs,
 } from '../db/schema';
 import type { NormalizedEmail } from '../integrations/gmail/normalize';
 import { assertUserId } from '../../domain/ownership';
@@ -363,6 +366,17 @@ export function scanStore(db: LoopDatabase, userId: string) {
               eq(externalEvents.connectionId, connectionId),
               eq(externalEvents.userId, userId),
               sql`NOT EXISTS (SELECT 1 FROM ${loopCandidates} WHERE ${externalEvents.id} = ANY(${loopCandidates.sourceReferences}))`,
+              sql`NOT EXISTS (SELECT 1 FROM ${loopEvents} WHERE (${loopEvents.payload}->'evidenceReferences') ? ${externalEvents.id}::text)`,
+              sql`NOT EXISTS (
+                SELECT 1
+                FROM ${loops}
+                INNER JOIN ${agentJobs} ON ${agentJobs.loopId} = ${loops.id} AND ${agentJobs.userId} = ${loops.userId}
+                WHERE ${loops.userId} = ${externalEvents.userId}
+                  AND ${loops.monitoringConnectionId} = ${externalEvents.connectionId}
+                  AND ${loops.monitoringConversationId} = ${externalEvents.conversationId}
+                  AND ${agentJobs.status} = 'RUNNING'
+                  AND ${agentJobs.leaseUntil} > now()
+              )`,
             ),
           );
         await tx
