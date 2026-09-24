@@ -5,8 +5,13 @@ import { requireWorkspace } from '@/server/auth';
 import { gmailRuntime } from '@/server/integrations/gmail/runtime';
 import { saveConnection } from '@/server/integrations/gmail/connections';
 import { getDb } from '@/server/db';
-import { scanSetup } from '@/server/scan/config';
-import { validateOAuthState } from '@/server/integrations/gmail/oauth-state';
+import {
+  consumeOAuthState,
+  validateOAuthState,
+} from '@/server/integrations/gmail/oauth-state';
+import { operationalLog } from '@/server/logging';
+import { readConfig } from '@/server/config';
+import { ScanError } from '@/domain/scan';
 
 export async function GET(request: Request) {
   const { user, session } = await requireWorkspace();
@@ -18,6 +23,10 @@ export async function GET(request: Request) {
   try {
     const { client, vault } = gmailRuntime();
     const state = validateOAuthState(vault, saved, params.get('state'), {
+      userId: user.id,
+      sessionId: session.id,
+    });
+    await consumeOAuthState(getDb(), state.state, {
       userId: user.id,
       sessionId: session.id,
     });
@@ -33,10 +42,15 @@ export async function GET(request: Request) {
       await saveConnection(getDb(), user.id, email, tokens, vault);
       notice = 'connected';
     }
-  } catch {
-    /* OAuth codes, tokens, and provider errors must never reach application logs. */
+  } catch (error) {
+    if (error instanceof ScanError) {
+      if (error.code === 'GMAIL_RESERVED') notice = 'connection-reserved';
+      else if (error.code === 'GMAIL_API') notice = 'provider-unavailable';
+      else if (error.code === 'GMAIL_AUTH') notice = 'connection-expired';
+    }
+    operationalLog({ event: 'oauth.failed', code: 'STATE' });
   }
-  const origin = scanSetup().origin ?? new URL(request.url).origin;
+  const origin = readConfig('web').APP_URL;
   return NextResponse.redirect(new URL(`/app/scan?notice=${notice}`, origin), {
     headers: { 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' },
   });

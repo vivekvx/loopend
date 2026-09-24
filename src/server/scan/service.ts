@@ -22,8 +22,12 @@ export function loopScanService(
   const store = scanStore(db, userId);
   const vault = tokenVault(dependencies.encryptionKey);
   return {
-    async scan(connectionId: string) {
-      const { connection, lease } = await store.acquire(connectionId);
+    async scan(
+      connectionId: string,
+      acquired?: Awaited<ReturnType<typeof store.acquire>>,
+    ) {
+      const { connection, lease } =
+        acquired ?? (await store.acquire(connectionId));
       const signal = AbortSignal.timeout(120_000);
       try {
         if (!connection.tokenCiphertext) throw new ScanError('GMAIL_AUTH');

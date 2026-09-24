@@ -44,21 +44,25 @@ export function scanStore(db: LoopDatabase, userId: string) {
     and(eq(sourceConnections.id, id), eq(sourceConnections.userId, userId));
   const ownedCandidate = (id: string) =>
     and(eq(loopCandidates.id, id), eq(loopCandidates.userId, userId));
+  const connections = () =>
+    db
+      .select({
+        id: sourceConnections.id,
+        accountEmail: sourceConnections.accountEmail,
+        status: sourceConnections.status,
+        lastScanAt: sourceConnections.lastScanAt,
+        lastScanCount: sourceConnections.lastScanCount,
+        lastScanError: sourceConnections.lastScanError,
+        scanLeaseUntil: sourceConnections.scanLeaseUntil,
+        scanRequestedAt: sourceConnections.scanRequestedAt,
+      })
+      .from(sourceConnections)
+      .where(eq(sourceConnections.userId, userId))
+      .orderBy(desc(sourceConnections.connectedAt));
   return {
+    connections,
     async review() {
-      const connections = await db
-        .select({
-          id: sourceConnections.id,
-          accountEmail: sourceConnections.accountEmail,
-          status: sourceConnections.status,
-          lastScanAt: sourceConnections.lastScanAt,
-          lastScanCount: sourceConnections.lastScanCount,
-          lastScanError: sourceConnections.lastScanError,
-          scanLeaseUntil: sourceConnections.scanLeaseUntil,
-        })
-        .from(sourceConnections)
-        .where(eq(sourceConnections.userId, userId))
-        .orderBy(desc(sourceConnections.connectedAt));
+      const connected = await connections();
       const candidates = await db
         .select()
         .from(loopCandidates)
@@ -92,7 +96,16 @@ export function scanStore(db: LoopDatabase, userId: string) {
               ),
             )
         : [];
-      return { connections, candidates, evidence };
+      return {
+        connections: connected.map((connection) => ({
+          ...connection,
+          scanDelayed:
+            !!connection.scanRequestedAt &&
+            connection.scanRequestedAt.getTime() < Date.now() - 300_000,
+        })),
+        candidates,
+        evidence,
+      };
     },
     async acquire(connectionId: string) {
       const now = new Date();
@@ -384,6 +397,8 @@ export function scanStore(db: LoopDatabase, userId: string) {
           .set({
             scanLeaseId: null,
             scanLeaseUntil: null,
+            scanRequestedAt: null,
+            scanAttempts: 0,
             lastScanAt: new Date(),
             lastScanCount: fetched,
             lastScanError: null,
@@ -399,6 +414,8 @@ export function scanStore(db: LoopDatabase, userId: string) {
         .set({
           scanLeaseId: null,
           scanLeaseUntil: null,
+          scanRequestedAt: null,
+          scanAttempts: 0,
           lastScanError: code,
           updatedAt: new Date(),
           ...(code === 'GMAIL_AUTH'

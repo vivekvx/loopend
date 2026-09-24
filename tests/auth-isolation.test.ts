@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../src/server/db/test-safety';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -22,7 +23,7 @@ import { LEGACY_OWNER_ID } from '../src/domain/ownership';
 import { claimLegacy } from '../src/server/db/claim-legacy';
 
 test('real accounts, sessions, ownership constraints, and tenant isolation', async (t) => {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 5, onnotice: () => {} });
@@ -194,7 +195,7 @@ test('real accounts, sessions, ownership constraints, and tenant isolation', asy
         );
         await assert.rejects(
           () => saveConnection(db, a.id, mailbox, tokens, tokenVault(key)),
-          /GMAIL_AUTH/,
+          /GMAIL_RESERVED/,
         );
         const [unchanged] = await db
           .select()
@@ -272,7 +273,7 @@ test('real accounts, sessions, ownership constraints, and tenant isolation', asy
         await detachConnection(db, b.id, connectionB);
         await assert.rejects(
           () => saveConnection(db, a.id, mailbox, tokens, tokenVault(key)),
-          /GMAIL_AUTH/,
+          /GMAIL_RESERVED/,
         );
       },
     );

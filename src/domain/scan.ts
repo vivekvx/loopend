@@ -47,6 +47,7 @@ export class ScanError extends Error {
     public readonly code:
       | 'SETUP'
       | 'GMAIL_AUTH'
+      | 'GMAIL_RESERVED'
       | 'GMAIL_API'
       | 'AI_API'
       | 'AI_OUTPUT'
@@ -63,6 +64,7 @@ export const scanMessages: Record<ScanError['code'], string> = {
     'Loop Scan needs its Gmail and AI configuration before scanning. Your existing Loops still work.',
   GMAIL_AUTH:
     'Gmail authorization has expired or been revoked. Reconnect to scan again.',
+  GMAIL_RESERVED: 'This Gmail account is reserved to another Loopend account.',
   GMAIL_API: 'Gmail could not finish this scan. Please try again in a moment.',
   AI_API:
     'The detector is unavailable right now. No suggestions were changed. Please try again.',

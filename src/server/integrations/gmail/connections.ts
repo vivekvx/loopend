@@ -37,11 +37,13 @@ export async function saveConnection(
         disconnectedAt: null,
         scanLeaseId: null,
         scanLeaseUntil: null,
+        scanRequestedAt: null,
+        scanAttempts: 0,
         lastScanError: null,
       },
     })
     .returning({ id: sourceConnections.id });
-  if (!connection) throw new ScanError('GMAIL_AUTH');
+  if (!connection) throw new ScanError('GMAIL_RESERVED');
   return connection.id;
 }
 export async function detachConnection(
@@ -68,6 +70,8 @@ export async function detachConnection(
         updatedAt: new Date(),
         scanLeaseId: null,
         scanLeaseUntil: null,
+        scanRequestedAt: null,
+        scanAttempts: 0,
         lastScanError: null,
       })
       .where(

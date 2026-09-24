@@ -11,8 +11,9 @@ import { detachConnection } from '../integrations/gmail/connections';
 import { googleTokens } from '../integrations/gmail/client';
 import { scanStore } from './store';
 import { scanSetup } from './config';
-import { structuredDetector } from './detector';
-import { loopScanService } from './service';
+import { requestScan } from './queue';
+import { readConfig } from '../config';
+import { rememberOAuthState } from '../integrations/gmail/oauth-state';
 
 export type ScanActionState = { error?: string; message?: string };
 const candidateIdentity = z.object({
@@ -35,6 +36,10 @@ export async function connectGmail(): Promise<ScanActionState> {
       };
     const { client, vault } = gmailRuntime();
     const state = client.begin();
+    await rememberOAuthState(getDb(), state, {
+      userId: user.id,
+      sessionId: session.id,
+    });
     url = state.url;
     (await cookies()).set(
       'loopend_gmail_oauth',
@@ -50,7 +55,8 @@ export async function connectGmail(): Promise<ScanActionState> {
       ),
       {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure:
+          readConfig('web').production || process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         maxAge: 600,
         path: '/api/gmail/callback',
@@ -70,19 +76,11 @@ export async function scanGmail(
     const setup = scanSetup();
     if (!setup.gmailReady || !setup.aiReady) throw new ScanError('SETUP');
     const id = z.uuid().parse(form.get('connectionId'));
-    const { client } = gmailRuntime();
-    const result = await loopScanService(getDb(), user.id, {
-      source: client,
-      detector: structuredDetector({
-        apiKey: process.env.LOOP_SCAN_AI_API_KEY!,
-        model: setup.model,
-        baseUrl: setup.baseUrl,
-      }),
-      encryptionKey: process.env.SOURCE_TOKEN_ENCRYPTION_KEY!,
-    }).scan(id);
+    await requestScan(getDb(), user.id, id);
     revalidatePath('/app/scan');
     return {
-      message: `Scan finished. ${result.fetched} messages checked; ${result.added} new ${result.added === 1 ? 'suggestion' : 'suggestions'}.${result.skipped ? ` ${result.skipped} messages excluded before detection.` : ''}`,
+      message:
+        'Your scan is queued. Suggestions will appear here when it finishes.',
     };
   } catch (error) {
     revalidatePath('/app/scan');
