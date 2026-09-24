@@ -4,11 +4,15 @@ import { getDb } from '@/server/db';
 import { scanStore } from '@/server/scan/store';
 import { DisconnectGmail } from '@/components/scan/scan-controls';
 import { SignOut } from '@/components/auth/sign-out';
+import { DeleteAccount } from '@/components/auth/delete-account';
+import { safeRead } from '@/server/errors';
 export const metadata = { title: 'Your account' };
 
 export default async function SettingsPage() {
   const { user } = await requireWorkspace();
-  const { connections } = await scanStore(getDb(), user.id).review();
+  const connections = await safeRead(() =>
+    scanStore(getDb(), user.id).connections(),
+  );
   const connected = connections.filter(
     (connection) => connection.status !== 'DISCONNECTED',
   );
@@ -59,6 +63,12 @@ export default async function SettingsPage() {
             Signing out ends this session. Your Loops stay here.
           </p>
           <SignOut />
+        </div>
+      </section>
+      <section className="settings-section">
+        <h2>Your data</h2>
+        <div>
+          <DeleteAccount />
         </div>
       </section>
     </main>
