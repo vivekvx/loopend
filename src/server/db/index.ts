@@ -2,13 +2,15 @@ import 'server-only';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import * as schema from './schema';
+import { databaseUrl, ConfigurationError } from '../config';
 
 const globalDb = globalThis as unknown as {
   loopendSql?: ReturnType<typeof postgres>;
 };
 export function getDb() {
-  const url = process.env.DATABASE_URL;
-  if (!url) throw new Error('DATABASE_URL is required.');
+  const parsed = databaseUrl.safeParse(process.env.DATABASE_URL);
+  if (!parsed.success) throw new ConfigurationError(['DATABASE_URL']);
+  const url = parsed.data;
   const client =
     globalDb.loopendSql ??
     postgres(url, {
@@ -16,6 +18,8 @@ export function getDb() {
       idle_timeout: 20,
       connect_timeout: 10,
       prepare: false,
+      onnotice: () => {},
+      connection: { statement_timeout: 10000 },
     });
   globalDb.loopendSql = client;
   return drizzle(client, { schema });

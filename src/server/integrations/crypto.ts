@@ -1,9 +1,11 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { ScanError } from '../../domain/scan';
+import { encryptionKey } from '../config';
 
 export function tokenVault(encodedKey: string) {
+  if (!encryptionKey.safeParse(encodedKey).success)
+    throw new ScanError('SETUP');
   const key = Buffer.from(encodedKey, 'base64');
-  if (key.length !== 32) throw new ScanError('SETUP');
   return {
     seal(value: unknown, purpose: string) {
       const iv = randomBytes(12);
@@ -22,8 +24,15 @@ export function tokenVault(encodedKey: string) {
     },
     open(value: string, purpose: string): unknown {
       try {
-        const [version, iv, tag, ciphertext] = value.split('.');
-        if (version !== 'v1' || !iv || !tag || !ciphertext) throw new Error();
+        const [version, iv, tag, ciphertext, extra] = value.split('.');
+        if (
+          version !== 'v1' ||
+          !iv ||
+          !tag ||
+          !ciphertext ||
+          extra !== undefined
+        )
+          throw new Error();
         const decipher = createDecipheriv(
           'aes-256-gcm',
           key,

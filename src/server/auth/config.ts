@@ -3,27 +3,16 @@ import { drizzleAdapter } from '@better-auth/drizzle-adapter';
 import type { LoopDatabase } from '../loops/service';
 import * as schema from '../db/auth-schema';
 import { LEGACY_OWNER_ID } from '../../domain/ownership';
+import { authSecret, originSchema, ConfigurationError } from '../config';
 
 export function createAuth(
   db: LoopDatabase,
   config: { secret: string; origin: string; secure: boolean },
 ) {
-  if (config.secret.length < 32)
-    throw new Error(
-      'BETTER_AUTH_SECRET must contain at least 32 random characters.',
-    );
-  const url = new URL(config.origin);
-  if (
-    url.origin !== config.origin ||
-    (url.protocol !== 'https:' &&
-      !(
-        url.protocol === 'http:' &&
-        ['localhost', '127.0.0.1'].includes(url.hostname)
-      ))
-  )
-    throw new Error(
-      'APP_URL must be a canonical HTTPS origin (HTTP loopback is allowed locally).',
-    );
+  if (!authSecret.safeParse(config.secret).success)
+    throw new ConfigurationError(['BETTER_AUTH_SECRET']);
+  if (!originSchema(false).safeParse(config.origin).success)
+    throw new ConfigurationError(['APP_URL']);
   return betterAuth({
     appName: 'loopend',
     baseURL: config.origin,

@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../../src/server/db/test-safety';
 import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import postgres from 'postgres';
@@ -7,11 +8,10 @@ import { z } from 'zod';
 import * as schema from '../../src/server/db/schema';
 import { createAuth } from '../../src/server/auth/config';
 
-export const TEST_AUTH_SECRET =
-  'test-only-auth-secret-never-use-for-deployment-2026';
+export const TEST_AUTH_SECRET = 'local-fixture-7vMp92XaR0qs4HkT8JwLc6nZ-2026';
 export const TEST_ORIGIN = 'http://127.0.0.1:3100';
 export async function registerTestAccount() {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 1, onnotice: () => {} });
