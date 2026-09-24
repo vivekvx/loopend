@@ -84,9 +84,7 @@ export function gmailClient(config: GmailConfig, fetcher: Fetcher = fetch) {
     if (
       result.data.scope &&
       (!result.data.scope.split(' ').includes(GMAIL_SCOPE) ||
-        result.data.scope
-          .split(' ')
-          .some((scope) => scope.includes('gmail.') && scope !== GMAIL_SCOPE))
+        result.data.scope.split(' ').some((scope) => scope !== GMAIL_SCOPE))
     )
       throw new ScanError('GMAIL_AUTH');
     return result.data;
