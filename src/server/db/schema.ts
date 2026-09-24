@@ -166,11 +166,16 @@ export const sourceConnections = pgTable(
     lastScanError: text('last_scan_error'),
     scanLeaseId: uuid('scan_lease_id'),
     scanLeaseUntil: timestamp('scan_lease_until', { withTimezone: true }),
+    scanRequestedAt: timestamp('scan_requested_at', { withTimezone: true }),
+    scanAttempts: integer('scan_attempts').notNull().default(0),
   },
   (t) => [
     uniqueIndex('source_id_owner_unique').on(t.id, t.userId),
     index('source_owner_idx').on(t.userId),
     uniqueIndex('source_provider_account_unique').on(t.provider, t.accountId),
+    index('source_scan_queue_idx')
+      .on(t.scanRequestedAt)
+      .where(sql`${t.scanRequestedAt} IS NOT NULL`),
   ],
 );
 
@@ -329,3 +334,16 @@ export const agentJobs = pgTable(
   ],
 );
 export type AgentJob = typeof agentJobs.$inferSelect;
+
+export const oauthStates = pgTable(
+  'gmail_oauth_states',
+  {
+    hash: text('hash').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    sessionId: text('session_id').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  },
+  (t) => [index('gmail_oauth_expiry_idx').on(t.expiresAt)],
+);
