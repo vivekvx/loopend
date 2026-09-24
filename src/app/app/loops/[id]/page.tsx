@@ -57,7 +57,7 @@ export default async function LoopDetail({
               <dd>{loop.verificationCondition}</dd>
             </div>
           </dl>
-          <MonitoringPanel loop={loop} />
+          <MonitoringPanel loop={loop} delayed={record.monitoringDelayed} />
           {loop.status !== 'CLOSED' && (
             <Link
               href={`/app/loops/${id}/edit`}

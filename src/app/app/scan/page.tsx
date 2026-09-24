@@ -1,4 +1,5 @@
 import { requireWorkspace } from '@/server/auth';
+import { safeRead } from '@/server/errors';
 import { getDb } from '@/server/db';
 import { scanStore } from '@/server/scan/store';
 import { scanSetup } from '@/server/scan/config';
@@ -11,12 +12,17 @@ import {
 } from '@/components/scan/scan-controls';
 import { CandidateCard } from '@/components/scan/candidate-card';
 export const metadata = { title: 'Loop Scan' };
-export const maxDuration = 180;
 const notices: Record<string, string> = {
   connected: 'Gmail connected. You choose when to scan and what to track.',
   'connection-cancelled': 'Connection cancelled. Nothing was imported.',
   'connection-failed':
     'Gmail could not be connected. Try again and allow read-only access.',
+  'connection-expired':
+    'This connection request expired or was already used. Start again from Loop Scan.',
+  'connection-reserved':
+    'This Gmail account is already connected to another Loopend account.',
+  'provider-unavailable':
+    'Google is temporarily unavailable. Please try connecting again shortly.',
   disconnected:
     'Gmail disconnected. Tokens removed. Saved suggestions, excerpts, and Loops remain.',
   'revocation-unconfirmed':
@@ -36,10 +42,9 @@ export default async function ScanPage({
   const { user } = await requireWorkspace();
   const { notice } = await searchParams;
   const setup = scanSetup();
-  const { connections, candidates, evidence } = await scanStore(
-    getDb(),
-    user.id,
-  ).review();
+  const { connections, candidates, evidence } = await safeRead(() =>
+    scanStore(getDb(), user.id).review(),
+  );
   const connected = connections.filter(
     (connection) => connection.status !== 'DISCONNECTED',
   );
@@ -135,8 +140,9 @@ export default async function ScanPage({
                   id={connection.id}
                   ready={setup.gmailReady && setup.aiReady}
                   running={
-                    !!connection.scanLeaseUntil &&
-                    connection.scanLeaseUntil > new Date()
+                    !!connection.scanRequestedAt ||
+                    (!!connection.scanLeaseUntil &&
+                      connection.scanLeaseUntil > new Date())
                   }
                 />
               ) : (
@@ -154,6 +160,12 @@ export default async function ScanPage({
                 </p>
               )}
             <DisconnectGmail id={connection.id} />
+            {connection.scanDelayed && (
+              <p className="scan-feedback">
+                Your scan is taking longer than expected. It is saved and
+                waiting for processing.
+              </p>
+            )}
           </div>
         ))}
         {!connected.length && (

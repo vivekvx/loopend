@@ -10,7 +10,13 @@ function inputTime(value: Date | null) {
   return value.toISOString().slice(0, 16);
 }
 
-export function MonitoringPanel({ loop }: { loop: Loop }) {
+export function MonitoringPanel({
+  loop,
+  delayed = false,
+}: {
+  loop: Loop;
+  delayed?: boolean;
+}) {
   const [state, action, pending] = useActionState(configureMonitoring, {});
   const gmail = loop.monitoringSource === 'GMAIL_CONVERSATION';
   const canEnable = gmail || loop.monitoringEnabled;
@@ -64,6 +70,12 @@ export function MonitoringPanel({ loop }: { loop: Loop }) {
         <p className="monitoring-observation">
           <span>Latest observation</span>
           {loop.monitoringLastObservation}
+        </p>
+      )}
+      {delayed && (
+        <p role="status" className="monitoring-message">
+          This check is delayed. Your Loop is saved; monitoring will resume when
+          the service is available.
         </p>
       )}
       {canEnable && loop.status !== 'CLOSED' && (
