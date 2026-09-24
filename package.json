@@ -7,18 +7,23 @@
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
-    "start": "next start --hostname 127.0.0.1",
+    "start": "NODE_ENV=production tsx scripts/validate-config.ts web && next start --hostname 0.0.0.0",
+    "config:check": "NODE_ENV=production tsx scripts/validate-config.ts",
+    "diagnostics": "tsx scripts/diagnostics.ts",
+    "smoke:local": "tsx --env-file-if-exists=.env.local scripts/smoke-local.ts",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file=.env.local scripts/migrate.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate:local": "tsx --env-file=.env.local scripts/migrate.ts",
     "db:seed": "tsx --env-file=.env.local scripts/seed.ts",
-    "db:claim-legacy": "tsx --env-file=.env.local scripts/claim-legacy.ts",
-    "worker": "tsx --env-file=.env.local scripts/agent-worker.ts",
-    "worker:once": "LOOPEND_WORKER_ONCE=1 tsx --env-file=.env.local scripts/agent-worker.ts",
-    "test": "tsx --env-file=.env.local --test --test-concurrency=1 tests/*.test.ts",
+    "db:claim-legacy": "tsx scripts/claim-legacy.ts",
+    "worker": "NODE_ENV=production tsx scripts/agent-worker.ts",
+    "worker:local": "tsx --env-file=.env.local scripts/agent-worker.ts",
+    "worker:once": "NODE_ENV=production LOOPEND_WORKER_ONCE=1 tsx scripts/agent-worker.ts",
+    "test": "tsx --env-file-if-exists=.env.local --import ./scripts/check-test-env.ts --test --test-concurrency=1 tests/*.test.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -35,6 +40,7 @@
     "react-dom": "19.3.0",
     "server-only": "^0.0.1",
     "three": "0.186.0",
+    "tsx": "^4.23.13",
     "zod": "^4.6.5"
   },
   "devDependencies": {
@@ -51,7 +57,6 @@
     "eslint-config-next": "16.3.5",
     "prettier": "^3.9.8",
     "tailwindcss": "^4.3.3",
-    "tsx": "^4.23.13",
     "typescript": "^6.0.3"
   }
 }

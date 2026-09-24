@@ -208,6 +208,9 @@ importers:
       three:
         specifier: 0.186.0
         version: 0.186.0
+      tsx:
+        specifier: ^4.23.13
+        version: 4.23.13
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -251,9 +254,6 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
-      tsx:
-        specifier: ^4.23.13
-        version: 4.23.13
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

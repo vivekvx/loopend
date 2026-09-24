@@ -3,11 +3,21 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
 import * as schema from '../src/server/db/schema';
 import { loopService } from '../src/server/loops/service';
+import { databaseUrl } from '../src/server/config';
 
-if (process.env.NODE_ENV === 'production')
+if (
+  process.env.NODE_ENV === 'production' ||
+  process.env.LOOPEND_DEPLOYMENT === 'production'
+)
   throw new Error('Development seeds cannot run in production.');
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required.');
-const client = postgres(process.env.DATABASE_URL, { max: 1 });
+const parsed = databaseUrl.safeParse(process.env.DATABASE_URL);
+if (!parsed.success)
+  throw new Error('A valid development database connection is required.');
+if (
+  !['localhost', '127.0.0.1', '[::1]'].includes(new URL(parsed.data).hostname)
+)
+  throw new Error('Development seeds require a local database.');
+const client = postgres(parsed.data, { max: 1, onnotice: () => {} });
 const db = drizzle(client, { schema });
 const userId = process.argv[2];
 if (!userId)
@@ -109,6 +119,11 @@ try {
       });
   }
   console.log('Development Loops seeded. Existing examples were preserved.');
+} catch {
+  console.error(
+    'Development seeding failed. Check the database and account ID.',
+  );
+  process.exitCode = 1;
 } finally {
   await client.end();
 }
