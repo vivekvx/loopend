@@ -1,13 +1,15 @@
 import type { Metadata } from 'next';
+import { connection } from 'next/server';
 import './globals.css';
 export const metadata: Metadata = {
   title: { default: 'loopend — Until it’s done.', template: '%s · loopend' },
   description:
     'Loopend remembers what hasn’t finished, takes the next step, and stays on it until it’s done.',
 };
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  await connection();
   return (
     <html lang="en" data-scroll-behavior="smooth">
       <body>
