@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../src/server/db/test-safety';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -20,7 +21,7 @@ import type { Detector } from '../src/domain/scan';
 import { candidateFixture, gmailFixture } from './fixtures/scan';
 
 test('Loop Scan persists suggestions, dedupes evidence, honors decisions, and promotes exactly once', async (t) => {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 5, onnotice: () => {} });

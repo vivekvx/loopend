@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../src/server/db/test-safety';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -21,7 +22,7 @@ import {
 } from '../src/domain/agent';
 
 test('durable monitoring claims safely, observes Gmail evidence, and preserves completion authority', async (t) => {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 8, onnotice: () => {} });

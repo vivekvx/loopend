@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../src/server/db/test-safety';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +9,7 @@ import * as schema from '../src/server/db/schema';
 import { loopService } from '../src/server/loops/service';
 
 test('PostgreSQL lifecycle, immutable events, stale edits, and concurrent completion', async () => {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url, 'TEST_DATABASE_URL must point to an isolated test database.');
   assert.notEqual(
     url,

@@ -1,12 +1,9 @@
 import { TEST_AUTH_SECRET } from './tests/fixtures/auth';
 import { defineConfig, devices } from '@playwright/test';
 import { config } from 'dotenv';
+import { testDatabaseUrl } from './src/server/db/test-safety';
 config({ path: '.env.local', quiet: true });
-if (
-  !process.env.TEST_DATABASE_URL ||
-  process.env.TEST_DATABASE_URL === process.env.DATABASE_URL
-)
-  throw new Error('Set a separate TEST_DATABASE_URL before browser tests.');
+const database = testDatabaseUrl();
 export default defineConfig({
   testDir: './tests/e2e',
   fullyParallel: false,
@@ -38,7 +35,8 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
-      DATABASE_URL: process.env.TEST_DATABASE_URL,
+      DATABASE_URL: database,
+      LOOPEND_DEPLOYMENT: 'local',
       BETTER_AUTH_SECRET: TEST_AUTH_SECRET,
       GOOGLE_CLIENT_ID: '',
       GOOGLE_CLIENT_SECRET: '',

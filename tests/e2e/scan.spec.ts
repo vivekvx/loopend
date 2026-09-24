@@ -1,3 +1,4 @@
+import { testDatabaseUrl } from '../../src/server/db/test-safety';
 import { test, expect } from './fixtures';
 import { randomBytes, randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
@@ -21,7 +22,7 @@ async function seedSuggestion(
   title: string,
   keepConnected = false,
 ) {
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 1 });
@@ -122,7 +123,7 @@ test('settings disconnect erases local tokens and keeps revocation failure guida
   await expect(
     page.getByRole('heading', { name: candidate.title }),
   ).toBeVisible();
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 1 });
@@ -230,7 +231,7 @@ test('another account’s Loop and candidate stay private, including a tampered 
     other.id,
     `Private candidate ${randomUUID()}`,
   );
-  const url = process.env.TEST_DATABASE_URL;
+  const url = testDatabaseUrl();
   assert.ok(url);
   assert.notEqual(url, process.env.DATABASE_URL);
   const client = postgres(url, { max: 1 });
