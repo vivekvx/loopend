@@ -33,7 +33,7 @@ The visual system uses an incomplete rust-red circle, warm paper, Manrope for re
 
 ## Loop Scan
 
-**Find what you’ve forgotten.** Connect Gmail with read-only permission, then explicitly scan up to 50 messages from the last 30 days. Connecting does not start a scan. Loopend cannot send, delete, or modify mail. Missing Gmail or AI configuration displays a setup state; manual Loops keep working.
+**Find what you’ve forgotten.** Connect Gmail with read-only permission, then explicitly scan up to 50 messages from the last 30 days. Connecting does not start a scan. Starting a scan queues durable work for the separate worker; the page can be left while it runs. Loopend cannot send, delete, or modify mail. In local development, missing Gmail or AI configuration displays a setup state and manual Loops keep working. Production validates the complete integration configuration before launch.
 
 Gmail → External Event → Detector → Candidate → Human approval → Loop
 
@@ -53,7 +53,7 @@ Loopend records a short observation in the immutable timeline. No new evidence l
 
 The detector receives shortened text, sender, subject, timestamp, direction, grounded date options, and opaque source references. Quoted history, common signatures, tracking URLs, and HTML are stripped where practical. Attachments are not stored or sent to the detector. Normalization is best-effort, not a guarantee that all personal information is removed.
 
-Loopend stores the connected account identity, encrypted Google tokens, message/thread identifiers, timestamps, and candidate decisions. During a monitoring check, no more than 12 recent normalized conversation excerpts are staged for evaluation. Once the observation is recorded, only accepted Loop Scan provenance and evidence cited by the immutable Loop timeline retain normalized excerpts (up to 2,000 characters per message), sender, subject, and date metadata. Other observed events retain only trace/dedupe identifiers, timestamps, and direction. Saved suggestions and cited evidence remain until an operator removes them; there is no automatic retention expiry or erase-all UI yet.
+Loopend stores the connected account identity, encrypted Google tokens, message/thread identifiers, timestamps, and candidate decisions. During a monitoring check, no more than 12 recent normalized conversation excerpts are staged for evaluation. Once the observation is recorded, only accepted Loop Scan provenance and evidence cited by the immutable Loop timeline retain normalized excerpts (up to 2,000 characters per message), sender, subject, and date metadata. Other observed events retain only trace/dedupe identifiers, timestamps, and direction. Saved suggestions and cited evidence remain until account deletion; there is no automatic retention expiry. Settings offers confirmed deletion of the entire account and its private data.
 
 Disconnect immediately removes local tokens, stops new scans, invalidates in-flight scan writes, and attempts Google revocation. If revocation fails, the UI directs the user to Google account permissions. Suggestions, cited excerpts, ignored-conversation dedupe records, and real Loops remain. Reconnecting the same account preserves decisions. Review the configured AI provider’s data handling before scanning sensitive mail.
 
@@ -65,4 +65,4 @@ Loops, history, connections, scan state, candidates, and source evidence are iso
 
 Existing pre-account data is preserved in quarantine, invisible to new accounts. An operator may explicitly transfer it to a named existing user after reviewing ownership. Signup never claims old data. Local seeds require a chosen account ID.
 
-Email addresses are login identifiers, not verified proof of mailbox ownership. This release does not include email verification, password reset email, social sign-in, account deletion, or cross-account transfer UI. No buttons pretend those capabilities exist. Gmail access always requires Google's separate authorization flow.
+Email addresses are login identifiers, not verified proof of mailbox ownership. This release does not include email verification, password reset email, social sign-in, or cross-account transfer UI. Settings includes permanent account deletion with explicit confirmation; local tokens, private data, history and all sessions are erased before best-effort Google revocation. Full deletion releases the mailbox reservation; disconnect alone does not. Unavailable capabilities have no placeholder controls. Gmail access always requires Google's separate authorization flow.

@@ -7,7 +7,7 @@ Loopend is a Next.js App Router modular monolith on the Node runtime, with stric
 - `src/domain/loops.ts`: schemas, completion invariants, state labels, attention calculation.
 - `src/domain/scan.ts`: provider-neutral detector contract, strict output schema, confidence filtering, source/date grounding, safe errors, scan limits.
 - `src/server/integrations`: Gmail OAuth/API adapter, bounded responses, message normalization, token encryption, connection lifecycle.
-- `src/server/scan`: configuration, AI adapter, orchestration, candidate persistence/promotion, authenticated actions. Network boundaries are injected for tests and future workers.
+- `src/server/scan`: configuration, AI adapter, orchestration, candidate persistence/promotion, authenticated actions. Network boundaries are injected for tests and the durable worker; web actions only enqueue scans.
 - `src/server/db`: lazy pooled PostgreSQL client and Drizzle schema.
 - `src/server/loops/service.ts`: commands and queries, independent of React and Next request APIs. It owns user and agent Loop transitions, event history, monitoring policy, and scheduling commands.
 - `src/server/agent`: durable-job claim/store, provider-neutral structured evaluator, and worker orchestration. It has no HTTP endpoint.
@@ -22,7 +22,7 @@ Loopend is a Next.js App Router modular monolith on the Node runtime, with stric
 
 Commands lock the Loop row with `FOR UPDATE`, compare an optimistic version, validate state invariants, then update the row and append events in one transaction. Stale submissions return a refresh instruction. Simultaneous completion submits produce one verified outcome. Updates capture before/after snapshots in their event payload.
 
-A PostgreSQL trigger rejects event UPDATE and DELETE. A CHECK constraint requires CLOSED and `closed_at` to agree. The service rejects all mutations to closed Loops. The database owner can bypass database protections, so production should use a least-privileged runtime role and a separate migration role. Do not grant the runtime role schema ownership or TRUNCATE.
+A PostgreSQL trigger rejects ordinary event UPDATE and DELETE. The only deletion exception is authenticated whole-account erasure through the migration-owned SECURITY DEFINER function; runtime cannot activate that exception directly. A CHECK constraint requires CLOSED and `closed_at` to agree. The service rejects all mutations to closed Loops. The database owner can bypass database protections, so production should use a least-privileged runtime role and a separate migration role. Do not grant the runtime role schema ownership or TRUNCATE.
 
 Versioned migrations are committed in `drizzle/`; `db:migrate` uses Drizzle’s migration journal. `db:generate` emits schema migrations. The immutable-event trigger is a custom migration. `db:seed <user-id>` is explicit, requires an existing account, rejects production mode, and skips that owner’s existing example titles. It never deletes records.
 
@@ -42,7 +42,7 @@ The provider/account unique reservation remains global deliberately: an OAuth ca
 
 Set a high-entropy `BETTER_AUTH_SECRET` (at least 32 characters) and canonical `APP_URL` in every environment. Generate a secret with `openssl rand -base64 32`; never use test fixtures. HTTPS is required except for local loopback development/tests. Old workspace-password cookies grant no access. Public landing rendering/builds need no auth secret; auth/app requests fail closed without configuration.
 
-Better Auth's database limiter persists across instances: sign-in is capped at 10 attempts/minute, signup at 5/minute, with a general 100/minute limit per request key. Deploy behind a trusted reverse proxy that overwrites forwarded client-IP headers and blocks direct backend access; IP rate limits are not trustworthy if clients can spoof those headers. Apply edge abuse/bot controls for a public launch. The app binds to loopback by default. Error UI is generic and never echoes provider errors/passwords. Auth logger payloads are disabled. Existing application errors likewise avoid sensitive payloads.
+Better Auth's database limiter persists across instances: sign-in is capped at 10 attempts/minute, signup at 5/minute, with a general 100/minute limit per request key. Deploy behind a trusted reverse proxy that overwrites forwarded client-IP headers and blocks direct backend access; IP rate limits are not trustworthy if clients can spoof those headers. Apply edge abuse/bot controls for a public launch. Local development binds to loopback; production start binds to 0.0.0.0 behind the trusted proxy. Error UI is generic and never echoes provider errors/passwords. Auth logger payloads are disabled. Existing application errors likewise avoid sensitive payloads.
 
 Only the configured origin is trusted. App navigation destinations are fixed; Better Auth rejects off-origin callback URLs. Next Server Actions retain their same-origin protection. Configure HTTPS/HSTS at the hosting proxy, preserve the app's anti-framing/nosniff headers, and redact OAuth callback queries and sensitive request bodies from infrastructure logs. Keep migration credentials separate; runtime must not own tables, disable triggers, or run TRUNCATE. Service-scoped authorization is the tenant boundary, with relational constraints as defense in depth; this is not PostgreSQL RLS.
 
@@ -88,10 +88,10 @@ Run the worker separately from the web process:
 
 ```sh
 pnpm dev
-pnpm worker
+pnpm worker:local
 ```
 
-`pnpm worker:once` claims and drains a small local batch then exits. Deploy one or more worker processes with the same database and server-only Gmail/AI environment variables; lease locking makes concurrent workers safe. SIGINT/SIGTERM stops new claims, allows the current lease-protected execution to finish, and explicitly closes the PostgreSQL client. Operational logs contain only lifecycle/action names, shortened opaque job IDs, attempts, durations, and safe error codes—never account identity, email content, tokens, or model payloads. There is intentionally no public worker route or in-memory timer.
+`pnpm worker:once` claims and drains a small local batch then exits. Deploy one or more worker processes with the same database and server-only Gmail/AI environment variables; lease locking makes concurrent workers safe. SIGINT/SIGTERM stops new claims, allows the current lease-protected execution to finish, and explicitly closes the PostgreSQL client. Operational logs contain only lifecycle/action names, shortened opaque job IDs, attempts, durations, and safe error codes—never account identity, email content, tokens, or model payloads. There is intentionally no public worker route or in-memory scheduling.
 
 ## Extension points
 
@@ -105,7 +105,7 @@ Gmail → External Event → Detector → Candidate → Human approval → Loop
 - `external_events` normalizes source evidence independently of Gmail UI: provider message/conversation IDs, timestamp, sender, subject, excerpt, metadata, and a unique connection/message hash. Only cited events retain text; other events keep trace identifiers and direction.
 - `loop_candidates` stores structured suggestions, references to external event UUIDs, confidence, status, version, and optional promoted Loop ID. A unique connection/conversation hash prevents duplicates. USER dismissals remain suppressed; SCAN dismissals can be re-evaluated. ACCEPTED/MERGED require a Loop reference.
 
-Scanning acquires a 180-second database lease atomically, with a 30-second cooldown after successful scans. The orchestrator performs network work outside transactions with a 120-second overall timeout, bounded response sizes, request deadlines, and cancellation. It fetches at most 50 unique recent message IDs across bounded pagination (30 days, excluding spam/trash/promotions/social), then normalizes MIME content and skips bulk mail. It does not download attachment bodies through attachment endpoints or crawl entire threads/mailboxes.
+Web actions persist scan_requested_at on the owner-scoped connection. The worker claims pending scans with SKIP LOCKED; a scan can be claimed at most three times after crashes. Scanning acquires a 180-second database lease atomically, with a 30-second cooldown after successful scans. The orchestrator performs network work outside transactions with a 120-second overall timeout, bounded response sizes, request deadlines, and cancellation. It fetches at most 50 unique recent message IDs across bounded pagination (30 days, excluding spam/trash/promotions/social), then normalizes MIME content and skips bulk mail. It does not download attachment bodies through attachment endpoints or crawl entire threads/mailboxes.
 
 The detector receives only normalized useful text and minimal metadata; Gmail identifiers become opaque conversation references. It returns zero or more strict structured objects. The OpenAI-compatible adapter is the only model-provider-specific boundary. Zod rejects unknown fields, invalid structures, arbitrary prose, refusals, and truncation. Application validation checks evidence membership, limits a suggestion to one conversation, discards LOW confidence, and only accepts dates grounded by deterministic extraction. Email content is explicitly treated as untrusted data, never instructions. These safeguards constrain output; they do not guarantee semantic correctness, so human approval is mandatory.
 
@@ -119,21 +119,21 @@ Acceptance locks the candidate, checks status/version/evidence, and calls `loopS
 2. Create a Web application OAuth client. Register exactly `APP_URL/api/gmail/callback` as an authorized redirect URI. Open Loopend using that same origin (`localhost` and `127.0.0.1` are different). Production requires HTTPS.
 3. Set the server-side values in `.env.local` (or your host’s secret manager), restart, enter Loop Scan, connect, then scan.
 
-| Variable                      | Purpose                                                                               |
-| ----------------------------- | ------------------------------------------------------------------------------------- |
-| `APP_URL`                     | Canonical origin, e.g. `http://localhost:3000`; no path or trailing slash             |
-| `GOOGLE_CLIENT_ID`            | Google Web application OAuth client ID                                                |
-| `GOOGLE_CLIENT_SECRET`        | Google OAuth client secret                                                            |
-| `SOURCE_TOKEN_ENCRYPTION_KEY` | 32 random bytes encoded as base64; generate with `openssl rand -base64 32`            |
-| `LOOP_SCAN_AI_API_KEY`        | Configured AI provider credential; absent means a supported setup state               |
-| `LOOP_SCAN_AI_BASE_URL`       | HTTPS OpenAI-compatible API root; defaults to `https://ai-gateway.vercel.sh/v1`       |
-| `LOOP_SCAN_AI_MODEL`          | Structured-output-capable model ID; defaults to `openai/gpt-4.1-mini` for the gateway |
+| Variable                      | Purpose                                                                                               |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `APP_URL`                     | Canonical origin, e.g. `http://localhost:3000`; no path or trailing slash                             |
+| `GOOGLE_CLIENT_ID`            | Google Web application OAuth client ID                                                                |
+| `GOOGLE_CLIENT_SECRET`        | Google OAuth client secret                                                                            |
+| `SOURCE_TOKEN_ENCRYPTION_KEY` | 32 random bytes encoded as base64; generate with `openssl rand -base64 32`                            |
+| `LOOP_SCAN_AI_API_KEY`        | Configured AI provider credential; absent means a supported local setup state; required in production |
+| `LOOP_SCAN_AI_BASE_URL`       | HTTPS OpenAI-compatible API root; explicitly configured, e.g. `https://ai-gateway.vercel.sh/v1`       |
+| `LOOP_SCAN_AI_MODEL`          | Structured-output-capable model ID; explicitly selected for the configured provider; no default       |
 
-Only `https://www.googleapis.com/auth/gmail.readonly` is requested. Gmail’s profile API supplies account identity; no send/delete/modify or additional profile scopes are needed. OAuth uses PKCE S256 and random state bound to an authenticated, encrypted, HTTP-only, SameSite=Lax cookie with a ten-minute lifetime. The callback requires workspace authentication, validates state/expiry/user/session, and consumes the cookie. Tokens are encrypted with AES-256-GCM and account-specific associated data. Changing the encryption key requires reconnecting accounts unless an explicit key-rotation migration is provided. Expired access tokens refresh server-side; revoked grants become NEEDS_REAUTH with local tokens erased.
+Only `https://www.googleapis.com/auth/gmail.readonly` is requested. Gmail’s profile API supplies account identity; no send/delete/modify or additional profile scopes are needed. OAuth uses PKCE S256 and random state bound to an authenticated, encrypted, HTTP-only, SameSite=Lax cookie with a ten-minute lifetime. The callback requires workspace authentication, validates state/expiry/user/session, consumes the cookie and atomically consumes its single-use database state hash before provider exchange. Tokens are encrypted with AES-256-GCM and account-specific associated data. Changing the encryption key requires reconnecting accounts unless an explicit key-rotation migration is provided. Expired access tokens refresh server-side; revoked grants become NEEDS_REAUTH with local tokens erased.
 
 Normal application logs never contain email bodies, model payloads, tokens, or provider error responses. Configure infrastructure access-log redaction for OAuth callback query parameters as well. Do not expose source tables or token ciphertext through client components. Backups containing source data are sensitive.
 
-Disconnect commits local token removal and lease invalidation before attempting remote revocation. It retains candidates, cited excerpts, Loop provenance, and decision/dedupe metadata, as disclosed in the UI. No automatic retention purge or erase-all UI exists yet. Full HTML, unnecessary raw headers, attachments, and uncited message bodies are not persisted. Review your AI provider’s retention policy and Google API Services User Data Policy before production use. Public distribution with Gmail’s restricted scope may require Google verification and a security assessment; testing-mode refresh grants can expire after seven days. These are deployment prerequisites, not bypassed by the application.
+Disconnect commits local token removal and lease invalidation before attempting remote revocation. It retains candidates, cited excerpts, Loop provenance, and decision/dedupe metadata, as disclosed in the UI. Settings offers confirmed whole-account erasure, including private event history, evidence, tokens, jobs and auth sessions. No automatic retention expiry exists. Full HTML, unnecessary raw headers, attachments, and uncited message bodies are not persisted. Review your AI provider’s retention policy and Google API Services User Data Policy before production use. Public distribution with Gmail’s restricted scope may require Google verification and a security assessment; testing-mode refresh grants can expire after seven days. These are deployment prerequisites, not bypassed by the application.
 
 ## Local operation
 
@@ -144,7 +144,7 @@ pnpm install
 cp .env.example .env.local
 createdb loopend_dev
 createdb loopend_test
-pnpm db:migrate
+pnpm db:migrate:local
 pnpm db:seed <user-id> # optional, after creating the intended account
 pnpm dev
 ```
@@ -162,7 +162,7 @@ pnpm test:e2e
 pnpm format:check
 ```
 
-For production, set DATABASE_URL, APP_URL, and BETTER_AUTH_SECRET; run migrations as a release step, then `pnpm build && pnpm start`. Never seed production. The build needs no live database because workspace pages render on request. Hosting should provide PostgreSQL backups, TLS, secret management, and request logs. No deployment is created automatically.
+For production, configure the complete web/worker contract in [deployment.md](deployment.md), run `pnpm db:migrate` with privileged release credentials, then `pnpm build && pnpm start` and a separate `pnpm worker`. Production scripts use host-injected environment variables, not `.env.local`. Never seed production. The build needs no live database because workspace pages render on request. Hosting should provide PostgreSQL backups, TLS, secret management, and request logs. No deployment is created automatically.
 
 If deploying to Vercel, install its CLI (`npm i -g vercel`) for `vercel env pull`, `vercel deploy`, and `vercel logs`. The app uses ordinary PostgreSQL connections and can use a managed provider’s pooled URL. Keep migration credentials separate and use the provider’s direct URL for migrations where required.
 
