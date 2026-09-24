@@ -6,6 +6,7 @@ import { DomainError } from '../../domain/loops';
 import { requireWorkspace } from '../auth';
 import { getDb } from '../db';
 import { loopService } from '../loops/service';
+import { operationalLog } from '../logging';
 
 export type MonitoringActionState = { error?: string; message?: string };
 const identity = z.object({
@@ -31,7 +32,7 @@ export async function configureMonitoring(
     if (error instanceof z.ZodError)
       return { error: error.issues.map((issue) => issue.message).join(' ') };
     if (error instanceof DomainError) return { error: error.message };
-    console.error('Monitoring configuration failed');
+    operationalLog({ event: 'web.failed', code: 'STORAGE' });
     return { error: 'Monitoring could not be changed. Please try again.' };
   }
   revalidatePath('/app');

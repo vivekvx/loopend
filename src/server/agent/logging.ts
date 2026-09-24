@@ -1,4 +1,5 @@
 import type { AgentError } from '../../domain/agent';
+import { operationalLog } from '../logging';
 
 type SafeErrorCode = AgentError['code'] | 'CONFIG' | 'DB_CLOSE' | 'WORKER';
 
@@ -34,5 +35,5 @@ export function shortJobId(id: string) {
 }
 
 export const consoleAgentLogger: AgentOperationalLogger = (event) => {
-  console.info('[loopend-worker]', JSON.stringify(event));
+  operationalLog(event);
 };
