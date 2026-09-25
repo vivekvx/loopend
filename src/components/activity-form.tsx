@@ -40,14 +40,14 @@ export function CompletionForm({
   const [state, action, pending] = useActionState(completeLoop, {});
   return (
     <section className="completion-panel">
-      <span className="eyebrow">The last step</span>
-      <h2>Did the outcome happen?</h2>
-      <p>{condition}</p>
+      <span className="eyebrow">Confirm the outcome</span>
+      <h2>Ready to close this Loop?</h2>
+      <p>Loopend suggests. You decide.</p>
       <form action={action}>
         <input type="hidden" name="id" value={id} />
         <input type="hidden" name="version" value={version} />
         <label>
-          Record the evidence
+          Evidence note
           <textarea
             name="evidence"
             required
@@ -58,8 +58,8 @@ export function CompletionForm({
           />
         </label>
         <label className="checkbox-label">
-          <input name="confirmed" type="checkbox" required />I verified that the
-          completion condition above is met.
+          <input name="confirmed" type="checkbox" required />I verified that
+          {` ${condition}`}
         </label>
         {state.error && (
           <p role="alert" className="form-error">

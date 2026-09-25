@@ -57,8 +57,11 @@ test('a real Loop persists through edits, activity, verification, and closure', 
   await page.getByRole('link', { name: 'Edit details & state' }).click();
   await page.getByLabel('Current state').selectOption('VERIFYING');
   await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(
+    page.getByRole('heading', { name: 'This may be finished.' }),
+  ).toBeVisible();
   await page
-    .getByLabel('Record the evidence')
+    .getByLabel('Evidence note')
     .fill('I checked the statement: the £128 credit arrived today.');
   await page.getByLabel('I verified that').check();
   await page.getByRole('button', { name: 'Verify & close Loop' }).click();

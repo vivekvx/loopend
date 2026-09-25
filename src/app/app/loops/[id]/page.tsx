@@ -7,6 +7,9 @@ import { LoopStatusLabel } from '@/components/loop-status';
 import { LoopMark } from '@/components/brand';
 import { ActivityForm, CompletionForm } from '@/components/activity-form';
 import { MonitoringPanel } from '@/components/monitoring-panel';
+import { LoopTimeline } from '@/components/loop-timeline';
+import { LocalDateTime } from '@/components/local-date-time';
+import { boundedExcerpt, userFacingCopy } from '@/lib/user-copy';
 export default async function LoopDetail({
   params,
 }: {
@@ -17,6 +20,10 @@ export default async function LoopDetail({
   const record = await (await workspaceQueries()).get(id);
   if (!record) notFound();
   const { loop, events, evidence } = record;
+  const possibleOutcome = [...events]
+    .reverse()
+    .find((event) => event.type === 'agent.possible_outcome_detected');
+  const reviewEvidence = evidence.slice(-5);
   return (
     <main id="main" className="detail-main">
       <Link className="back-link" href="/app">
@@ -68,20 +75,51 @@ export default async function LoopDetail({
           )}
           {loop.status === 'VERIFYING' && (
             <>
-              {evidence.length > 0 && (
-                <details className="evidence-review">
-                  <summary>Review the evidence Loopend found</summary>
-                  {evidence.map((item) => (
-                    <article key={item.id}>
-                      <strong>{item.subject || 'Gmail message'}</strong>
-                      <span>
-                        {item.sender} · {formatDate(item.occurredAt)}
-                      </span>
-                      <p>{item.content || 'Message metadata only'}</p>
-                    </article>
-                  ))}
-                </details>
-              )}
+              <section
+                className="verifying-panel"
+                aria-labelledby="verify-title"
+              >
+                <span className="eyebrow">Ready to verify</span>
+                <h2 id="verify-title">This may be finished.</h2>
+                <p>Loopend found evidence that the outcome may be complete.</p>
+                <dl>
+                  <div>
+                    <dt>Completion condition</dt>
+                    <dd>{loop.verificationCondition}</dd>
+                  </div>
+                </dl>
+                {reviewEvidence.length > 0 && (
+                  <details className="evidence-review">
+                    <summary>
+                      Review evidence ({reviewEvidence.length}
+                      {reviewEvidence.length < evidence.length
+                        ? ` of ${evidence.length}`
+                        : ''}
+                      )
+                    </summary>
+                    {reviewEvidence.map((item) => (
+                      <article key={item.id}>
+                        <span className="evidence-source">Gmail</span>
+                        <strong>{item.subject || 'Message from Gmail'}</strong>
+                        <span>
+                          {item.sender || 'Gmail sender'} ·{' '}
+                          <LocalDateTime value={item.occurredAt} />
+                        </span>
+                        <p>
+                          {boundedExcerpt(item.content) ||
+                            'Message metadata only'}
+                        </p>
+                        {possibleOutcome && (
+                          <p className="evidence-reason">
+                            <span>Why it matters</span>
+                            {userFacingCopy(possibleOutcome.body)}
+                          </p>
+                        )}
+                      </article>
+                    ))}
+                  </details>
+                )}
+              </section>
               <CompletionForm
                 id={id}
                 version={loop.version}
@@ -100,8 +138,20 @@ export default async function LoopDetail({
             <div className="closed-banner">
               <LoopMark closed />
               <div>
+                <span className="eyebrow">Closed</span>
                 <h2>One less open Loop.</h2>
-                <p>Verified and closed on {formatDate(loop.closedAt)}.</p>
+                <p>
+                  Verified <LocalDateTime value={loop.closedAt} />
+                </p>
+                {events
+                  .filter((event) => event.type === 'outcome.verified')
+                  .slice(-1)
+                  .map((event) => (
+                    <p className="closed-evidence" key={event.id}>
+                      <span>Evidence</span>
+                      {userFacingCopy(event.body)}
+                    </p>
+                  ))}
               </div>
             </div>
           )}
@@ -111,26 +161,7 @@ export default async function LoopDetail({
             <h2>The story so far</h2>
             <span className="count">{events.length}</span>
           </div>
-          <ol className="timeline">
-            {events.map((event) => (
-              <li
-                key={event.id}
-                className={
-                  event.type === 'loop.closed' ? 'timeline-closed' : ''
-                }
-              >
-                <span className="timeline-point" />
-                <time dateTime={event.occurredAt.toISOString()}>
-                  {formatDate(event.occurredAt)} ·{' '}
-                  {event.actor === 'user' ? 'You' : event.actor}
-                </time>
-                <p>{event.body}</p>
-                {event.type === 'outcome.verified' && (
-                  <span className="verified-label">Completion evidence</span>
-                )}
-              </li>
-            ))}
-          </ol>
+          <LoopTimeline events={events} />
           {loop.status !== 'CLOSED' && (
             <ActivityForm key={loop.version} id={id} version={loop.version} />
           )}

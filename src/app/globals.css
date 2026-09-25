@@ -1047,6 +1047,12 @@ textarea::placeholder {
   font-size: 11px;
   line-height: 1.5;
 }
+.local-date-time {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 .monitoring-observation {
   padding-left: 12px;
   border-left: 2px solid #b6b9ab;
@@ -1079,22 +1085,47 @@ textarea::placeholder {
   color: var(--success);
   margin-top: 12px;
 }
+.verifying-panel {
+  margin-top: 34px;
+  padding: 24px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.verifying-panel h2 {
+  font-size: 22px;
+  font-weight: 500;
+  margin: 10px 0;
+}
+.verifying-panel > p {
+  max-width: 620px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
 .evidence-review {
-  margin-top: 28px;
-  padding: 16px;
-  background: #ece9e1;
+  margin-top: 22px;
   font-size: 11px;
 }
-.evidence-review summary {
+.evidence-review > summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
   cursor: pointer;
   font-weight: 500;
 }
+.evidence-review[open] > summary {
+  margin-bottom: 4px;
+  font-size: 11px;
+}
 .evidence-review article {
   border-top: 1px solid var(--line);
-  margin-top: 14px;
-  padding-top: 14px;
+  padding: 14px 0;
 }
-.evidence-review article span {
+.evidence-review article span,
+.evidence-source,
+.evidence-reason {
   display: block;
   color: var(--muted);
   font-size: 9px;
@@ -1103,6 +1134,7 @@ textarea::placeholder {
 .evidence-review article p {
   white-space: pre-wrap;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 .completion-panel {
   padding: 25px;
@@ -1157,6 +1189,10 @@ textarea::placeholder {
   color: var(--muted);
   margin-top: 4px;
 }
+.closed-evidence {
+  max-width: 480px;
+  white-space: pre-wrap;
+}
 .timeline {
   list-style: none;
   padding: 0 0 0 14px;
@@ -1194,6 +1230,20 @@ textarea::placeholder {
   margin-top: 8px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.timeline-activity {
+  margin-top: 24px;
+}
+.timeline-activity > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+.timeline-routine {
+  margin: 16px 0 0;
+}
+.timeline-routine li {
+  opacity: 0.7;
 }
 .verified-label {
   font-size: 9px;
@@ -1693,6 +1743,16 @@ textarea::placeholder {
   font-size: 11px;
   color: var(--muted);
 }
+.app-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.app-header-actions .button {
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 11px;
+}
 .settings-section {
   display: grid;
   grid-template-columns: 1fr 2fr;
@@ -1758,10 +1818,13 @@ textarea::placeholder {
     grid-row: 2;
     justify-content: space-between;
   }
-  .app-header .account-link {
-    font-size: 11px;
+  .app-header-actions {
     grid-column: 2;
     grid-row: 1;
+    gap: 10px;
+  }
+  .app-header .account-link {
+    font-size: 11px;
   }
   .account-link .avatar {
     display: none;

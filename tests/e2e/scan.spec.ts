@@ -171,9 +171,7 @@ test('source evidence is inspectable and Track this creates a provenance-linked 
     page.getByRole('heading', { name: candidate.title }),
   ).toBeVisible();
   await expect(
-    page.getByText(
-      'You reviewed a Loop Scan suggestion from Gmail and chose to track it.',
-    ),
+    page.getByText('You tracked this Loop from Gmail.'),
   ).toBeVisible();
   await expect(page.locator('.detail-header .status')).toHaveText('Open');
   await expect(
