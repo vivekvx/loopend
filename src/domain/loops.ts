@@ -82,11 +82,15 @@ export const monitoringInput = z.object({
     .optional()
     .transform((value) => (value ? value : null))
     .refine(
-      (value) => !value || !Number.isNaN(new Date(value).getTime()),
+      (value) =>
+        !value ||
+        (z.string().datetime({ offset: true }).safeParse(value).success &&
+          !Number.isNaN(new Date(value).getTime())),
       'Choose a valid next check time.',
     ),
 });
 export class DomainError extends Error {}
+export class MonitoringConflictError extends DomainError {}
 export function assertEditable(status: LoopStatus) {
   if (status === 'CLOSED')
     throw new DomainError(

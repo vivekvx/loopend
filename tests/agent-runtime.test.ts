@@ -5,7 +5,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import * as schema from '../src/server/db/schema';
 import { tokenVault } from '../src/server/integrations/crypto';
 import { saveConnection } from '../src/server/integrations/gmail/connections';
@@ -16,6 +16,7 @@ import { loopService } from '../src/server/loops/service';
 import { agentRuntimeService } from '../src/server/agent/service';
 import { agentStore } from '../src/server/agent/store';
 import { ScanError } from '../src/domain/scan';
+import { MonitoringConflictError } from '../src/domain/loops';
 import {
   AGENT_CONTEXT_MESSAGES,
   type AgentEvaluator,
@@ -89,11 +90,15 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
       candidate.version,
     );
     const loop = (await loopService(db, userId).get(loopId))!.loop;
-    await loopService(db, userId).configureMonitoring(loopId, loop.version, {
-      enabled: 'true',
-      cadenceHours: '24',
-      nextCheckAt: new Date(Date.now() - 60_000).toISOString(),
-    });
+    await loopService(db, userId).configureMonitoring(
+      loopId,
+      loop.monitoringGeneration,
+      {
+        enabled: 'true',
+        cadenceHours: '24',
+        nextCheckAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    );
     const [job] = await db
       .select()
       .from(schema.agentJobs)
@@ -180,7 +185,7 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
           .loop;
         await loopService(db, userId).configureMonitoring(
           disabled.loopId,
-          record.version,
+          record.monitoringGeneration,
           {
             enabled: 'false',
             cadenceHours: '24',
@@ -219,6 +224,163 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
           },
         }).runOne();
         assert.equal(calls, 0);
+      },
+    );
+    await t.test(
+      'explicit first check can run before a future expected date',
+      async () => {
+        const tracked = await createTracked();
+        let record = (await loopService(db, userId).get(tracked.loopId))!.loop;
+        const futureExpected = '2099-10-02';
+        await loopService(db, userId).update(tracked.loopId, record.version, {
+          ...record,
+          expectedBy: futureExpected,
+        });
+        record = (await loopService(db, userId).get(tracked.loopId))!.loop;
+        const requested = new Date(Date.now() + 60_000);
+        await loopService(db, userId).configureMonitoring(
+          tracked.loopId,
+          record.monitoringGeneration,
+          {
+            enabled: 'true',
+            cadenceHours: '72',
+            nextCheckAt: requested.toISOString(),
+          },
+        );
+        const updated = (await loopService(db, userId).get(tracked.loopId))!
+          .loop;
+        const afterExpected = new Date(`${futureExpected}T12:00:00.000Z`);
+        afterExpected.setUTCDate(afterExpected.getUTCDate() + 1);
+        assert.ok(updated.monitoringNextCheckAt);
+        assert.ok(updated.monitoringNextCheckAt < afterExpected);
+      },
+    );
+    await t.test(
+      'monitoring updates ignore worker versions but reject conflicting schedules',
+      async () => {
+        const tracked = await createTracked();
+        await isolateDue(tracked.jobId);
+        const beforeWorker = (await loopService(db, userId).get(
+          tracked.loopId,
+        ))!.loop;
+        await run([], {
+          evaluate: async () => assert.fail('no model call'),
+        }).runOne();
+        const afterWorker = (await loopService(db, userId).get(tracked.loopId))!
+          .loop;
+        assert.ok(afterWorker.version > beforeWorker.version);
+        assert.equal(
+          afterWorker.monitoringGeneration,
+          beforeWorker.monitoringGeneration,
+        );
+
+        const scheduled = new Date(Date.now() + 5 * 60_000);
+        const updated = await loopService(db, userId).configureMonitoring(
+          tracked.loopId,
+          beforeWorker.monitoringGeneration,
+          {
+            enabled: 'true',
+            cadenceHours: '72',
+            nextCheckAt: scheduled.toISOString(),
+          },
+        );
+        assert.equal(
+          updated.monitoringNextCheckAt?.getTime(),
+          scheduled.getTime(),
+        );
+
+        await assert.rejects(
+          () =>
+            loopService(db, userId).configureMonitoring(
+              tracked.loopId,
+              beforeWorker.monitoringGeneration,
+              {
+                enabled: 'true',
+                cadenceHours: '24',
+                nextCheckAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+              },
+            ),
+          MonitoringConflictError,
+        );
+
+        const record = (await loopService(db, userId).get(tracked.loopId))!;
+        const active = await db
+          .select()
+          .from(schema.agentJobs)
+          .where(
+            and(
+              eq(schema.agentJobs.loopId, tracked.loopId),
+              eq(schema.agentJobs.generation, record.loop.monitoringGeneration),
+              eq(schema.agentJobs.status, 'PENDING'),
+            ),
+          );
+        assert.equal(active.length, 1);
+        assert.equal(
+          record.events.filter(
+            (event) => event.type === 'monitoring.rescheduled',
+          ).length,
+          1,
+        );
+      },
+    );
+    await t.test(
+      'invalid, closed, and cross-user monitoring changes are rejected',
+      async () => {
+        const tracked = await createTracked();
+        const record = (await loopService(db, userId).get(tracked.loopId))!
+          .loop;
+        await assert.rejects(
+          () =>
+            loopService(db, userId).configureMonitoring(
+              tracked.loopId,
+              record.monitoringGeneration,
+              {
+                enabled: 'true',
+                cadenceHours: '24',
+                nextCheckAt: new Date(Date.now() - 60_000).toISOString(),
+              },
+            ),
+          /future time/,
+        );
+        const other = randomUUID();
+        await db.insert(schema.user).values({
+          id: other,
+          name: 'Other monitoring user',
+          email: `${other}@example.com`,
+        });
+        await assert.rejects(() =>
+          loopService(db, other).configureMonitoring(
+            tracked.loopId,
+            record.monitoringGeneration,
+            { enabled: 'false', cadenceHours: '24' },
+          ),
+        );
+        await loopService(db, userId).update(tracked.loopId, record.version, {
+          ...record,
+          expectedBy: record.expectedBy ?? '',
+          status: 'VERIFYING',
+        });
+        const verifying = (await loopService(db, userId).get(tracked.loopId))!
+          .loop;
+        assert.equal(verifying.monitoringEnabled, false);
+        assert.equal(verifying.monitoringNextCheckAt, null);
+        await loopService(db, userId).complete(
+          tracked.loopId,
+          verifying.version,
+          {
+            evidence: 'A person verified the refund in their account.',
+            confirmed: true,
+          },
+        );
+        const closed = (await loopService(db, userId).get(tracked.loopId))!
+          .loop;
+        await assert.rejects(() =>
+          loopService(db, userId).configureMonitoring(
+            tracked.loopId,
+            closed.monitoringGeneration,
+            { enabled: 'true', cadenceHours: '24' },
+          ),
+        );
       },
     );
     await t.test(
@@ -261,11 +423,55 @@ test('durable monitoring claims safely, observes Gmail evidence, and preserves c
             evidenceReferences: [input.evidence.at(-1)!.id],
             recommendedNextCheckAt: null,
             userSummary:
-              'The store says the refund was issued. Please verify it in your account.',
+              'The store says the refund was issued in the email from 2026-09-25T14:02:55.000Z. Please verify it in your account.',
           }),
         }).runOne();
         const record = await loopService(db, userId).get(tracked.loopId);
         assert.equal(record?.loop.status, 'VERIFYING');
+        assert.equal(record?.loop.monitoringEnabled, false);
+        assert.equal(record?.loop.monitoringNextCheckAt, null);
+        assert.ok(
+          record?.events.some(
+            (event) =>
+              event.type === 'agent.possible_outcome_detected' &&
+              !event.body.includes('2026-09-25T14:02:55.000Z'),
+          ),
+        );
+        const activeJobs = await db
+          .select()
+          .from(schema.agentJobs)
+          .where(
+            and(
+              eq(schema.agentJobs.loopId, tracked.loopId),
+              inArray(schema.agentJobs.status, ['PENDING', 'RUNNING']),
+            ),
+          );
+        assert.equal(activeJobs.length, 0);
+        const staleGeneration = record!.loop.monitoringGeneration - 1;
+        const [staleJob] = await db
+          .insert(schema.agentJobs)
+          .values({
+            userId,
+            loopId: tracked.loopId,
+            generation: staleGeneration,
+            idempotencyKey: randomUUID(),
+            runAt: new Date(Date.now() - 1_000),
+          })
+          .returning();
+        const staleWorker = run([], {
+          evaluate: async () => assert.fail('a stale job must not evaluate'),
+        });
+        assert.equal(await staleWorker.runOne(), true);
+        const afterStale = await loopService(db, userId).get(tracked.loopId);
+        assert.equal(afterStale?.loop.status, 'VERIFYING');
+        const [finishedStaleJob] = await db
+          .select()
+          .from(schema.agentJobs)
+          .where(eq(schema.agentJobs.id, staleJob.id));
+        assert.ok(
+          ['COMPLETED', 'CANCELLED'].includes(finishedStaleJob.status),
+          'a stale job must never become active again',
+        );
         await assert.rejects(
           () =>
             loopService(db, userId).complete(

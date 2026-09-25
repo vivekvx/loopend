@@ -9,6 +9,7 @@ import {
   completionInput,
   DomainError,
   loopInput,
+  MonitoringConflictError,
   monitoringInput,
   statusLabels,
 } from '../../domain/loops';
@@ -17,6 +18,7 @@ import {
   agentMaxAttempts,
   type AgentDecision,
 } from '../../domain/agent';
+import { userFacingCopy } from '../../lib/user-copy';
 
 export type LoopDatabase = PostgresJsDatabase<typeof schema>;
 export type LoopTransaction = Parameters<
@@ -41,6 +43,35 @@ export function loopService(
         'This Loop changed in another window. Refresh the page and try again.',
       );
     return loop;
+  }
+  async function lockedForMonitoring(
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+    id: string,
+    monitoringGeneration: number,
+  ) {
+    const [loop] = await tx.select().from(loops).where(owned(id)).for('update');
+    if (!loop) throw new DomainError('This Loop could not be found.');
+    if (loop.monitoringGeneration !== monitoringGeneration)
+      throw new MonitoringConflictError('Monitoring configuration is stale.');
+    return loop;
+  }
+  async function cancelActiveMonitoringJobs(
+    tx: LoopTransaction,
+    loopId: string,
+    now: Date,
+    exceptJobId?: string,
+  ) {
+    await tx
+      .update(schema.agentJobs)
+      .set({ status: 'CANCELLED', updatedAt: now })
+      .where(
+        and(
+          eq(schema.agentJobs.loopId, loopId),
+          eq(schema.agentJobs.userId, userId),
+          inArray(schema.agentJobs.status, ['PENDING', 'RUNNING']),
+          exceptJobId ? ne(schema.agentJobs.id, exceptJobId) : undefined,
+        ),
+      );
   }
   async function minimizeConversationEvidence(
     tx: LoopTransaction,
@@ -218,13 +249,24 @@ export function loopService(
       return db.transaction(async (tx) => {
         const previous = await locked(tx, id, version);
         assertEditable(previous.status);
+        const now = new Date();
+        const stopMonitoring =
+          input.status === 'VERIFYING' && previous.monitoringEnabled;
+        if (stopMonitoring) await cancelActiveMonitoringJobs(tx, id, now);
         const [loop] = await tx
           .update(loops)
           .set({
             ...input,
             expectedBy: input.expectedBy || null,
-            version: version + 1,
-            updatedAt: new Date(),
+            ...(stopMonitoring
+              ? {
+                  monitoringEnabled: false,
+                  monitoringNextCheckAt: null,
+                  monitoringGeneration: previous.monitoringGeneration + 1,
+                }
+              : {}),
+            version: previous.version + 1,
+            updatedAt: now,
           })
           .where(owned(id))
           .returning();
@@ -263,6 +305,8 @@ export function loopService(
         const loop = await locked(tx, id, version);
         assertCompletable(loop.status);
         const now = new Date();
+        if (loop.monitoringEnabled)
+          await cancelActiveMonitoringJobs(tx, id, now);
         await tx.insert(loopEvents).values({
           loopId: id,
           type: 'outcome.verified',
@@ -283,67 +327,79 @@ export function loopService(
             status: 'CLOSED',
             closedAt: now,
             updatedAt: now,
-            version: version + 1,
+            ...(loop.monitoringEnabled
+              ? {
+                  monitoringEnabled: false,
+                  monitoringNextCheckAt: null,
+                  monitoringGeneration: loop.monitoringGeneration + 1,
+                }
+              : {}),
+            version: loop.version + 1,
           })
           .where(owned(id));
       });
     },
-    async configureMonitoring(id: string, version: number, raw: unknown) {
+    async configureMonitoring(
+      id: string,
+      monitoringGeneration: number,
+      raw: unknown,
+    ) {
       const input = monitoringInput.parse(raw);
       return db.transaction(async (tx) => {
-        const loop = await locked(tx, id, version);
+        const loop = await lockedForMonitoring(tx, id, monitoringGeneration);
         assertEditable(loop.status);
         const generation = loop.monitoringGeneration + 1;
         const now = new Date();
-        await tx
-          .update(schema.agentJobs)
-          .set({ status: 'CANCELLED', updatedAt: now })
-          .where(
-            and(
-              eq(schema.agentJobs.loopId, id),
-              eq(schema.agentJobs.userId, userId),
-              inArray(schema.agentJobs.status, ['PENDING', 'RUNNING']),
-            ),
-          );
-        await minimizeConversationEvidence(tx, loop);
         if (!input.enabled) {
-          await tx
+          await cancelActiveMonitoringJobs(tx, id, now);
+          await minimizeConversationEvidence(tx, loop);
+          const [updated] = await tx
             .update(loops)
             .set({
               monitoringEnabled: false,
               monitoringNextCheckAt: null,
               monitoringGeneration: generation,
               updatedAt: now,
-              version: version + 1,
+              version: loop.version + 1,
             })
-            .where(owned(id));
+            .where(owned(id))
+            .returning();
           await tx.insert(loopEvents).values({
             loopId: id,
-            type: 'agent.monitoring_disabled',
+            type: 'monitoring.paused',
             source: 'agent',
             actor: 'user',
             body: 'Monitoring paused. Loopend will not check this Loop again until you resume it.',
           });
-          return;
+          return updated;
         }
         if (loop.status === 'VERIFYING')
           throw new DomainError(
             'Finish reviewing this outcome before resuming monitoring.',
           );
-        const [candidate] = await tx
-          .select({
-            connectionId: schema.loopCandidates.connectionId,
-            conversationId: schema.loopCandidates.conversationId,
-          })
-          .from(schema.loopCandidates)
-          .where(
-            and(
-              eq(schema.loopCandidates.loopId, id),
-              eq(schema.loopCandidates.userId, userId),
-              eq(schema.loopCandidates.status, 'ACCEPTED'),
-            ),
-          );
-        if (!candidate)
+        const source =
+          loop.monitoringSource === 'GMAIL_CONVERSATION' &&
+          loop.monitoringConnectionId &&
+          loop.monitoringConversationId
+            ? {
+                connectionId: loop.monitoringConnectionId,
+                conversationId: loop.monitoringConversationId,
+              }
+            : await tx
+                .select({
+                  connectionId: schema.loopCandidates.connectionId,
+                  conversationId: schema.loopCandidates.conversationId,
+                })
+                .from(schema.loopCandidates)
+                .where(
+                  and(
+                    eq(schema.loopCandidates.loopId, id),
+                    eq(schema.loopCandidates.userId, userId),
+                    eq(schema.loopCandidates.status, 'ACCEPTED'),
+                  ),
+                )
+                .then(([candidate]) => candidate);
+        if (!source)
           throw new DomainError(
             'Monitoring is available for Loops you chose to track from Gmail.',
           );
@@ -352,51 +408,75 @@ export function loopService(
           .from(schema.sourceConnections)
           .where(
             and(
-              eq(schema.sourceConnections.id, candidate.connectionId),
+              eq(schema.sourceConnections.id, source.connectionId),
               eq(schema.sourceConnections.userId, userId),
               eq(schema.sourceConnections.status, 'CONNECTED'),
             ),
           );
         if (!connection)
           throw new DomainError('Reconnect Gmail before enabling monitoring.');
-        const afterExpected = loop.expectedBy
-          ? new Date(`${loop.expectedBy}T12:00:00.000Z`).getTime() +
-            24 * 60 * 60 * 1000
-          : 0;
         const requested = input.nextCheckAt
           ? new Date(input.nextCheckAt).getTime()
-          : now.getTime() + input.cadenceHours * 60 * 60 * 1000;
+          : null;
+        if (requested !== null && requested <= now.getTime())
+          throw new DomainError('Choose a future time for the next check.');
+        const afterExpected =
+          requested === null && loop.expectedBy
+            ? new Date(`${loop.expectedBy}T12:00:00.000Z`).getTime() +
+              24 * 60 * 60 * 1000
+            : 0;
+        const earliest =
+          requested === null
+            ? now.getTime() + 12 * 60 * 60 * 1000
+            : now.getTime();
         const next = new Date(
           Math.max(
-            now.getTime() + 12 * 60 * 60 * 1000,
-            requested,
+            earliest,
+            requested ?? now.getTime() + input.cadenceHours * 60 * 60 * 1000,
             afterExpected,
           ),
         );
         const nextStatus = loop.status === 'OPEN' ? 'WAITING' : loop.status;
-        await tx
+        if (
+          loop.monitoringEnabled &&
+          loop.monitoringCadenceHours === input.cadenceHours &&
+          loop.monitoringNextCheckAt?.getTime() === next.getTime()
+        )
+          return loop;
+        await cancelActiveMonitoringJobs(tx, id, now);
+        await minimizeConversationEvidence(tx, loop);
+        const [updated] = await tx
           .update(loops)
           .set({
             status: nextStatus,
             monitoringEnabled: true,
             monitoringSource: 'GMAIL_CONVERSATION',
             monitoringMode: 'OBSERVE_ONLY',
-            monitoringConnectionId: candidate.connectionId,
-            monitoringConversationId: candidate.conversationId,
+            monitoringConnectionId: source.connectionId,
+            monitoringConversationId: source.conversationId,
             monitoringCadenceHours: input.cadenceHours,
             monitoringNextCheckAt: next,
             monitoringGeneration: generation,
             updatedAt: now,
-            version: version + 1,
+            version: loop.version + 1,
           })
-          .where(owned(id));
+          .where(owned(id))
+          .returning();
         await tx.insert(loopEvents).values({
           loopId: id,
-          type: 'agent.monitoring_enabled',
+          type: loop.monitoringEnabled
+            ? 'monitoring.rescheduled'
+            : 'monitoring.enabled',
           source: 'agent',
           actor: 'user',
-          body: 'Loopend will quietly watch this Gmail conversation for evidence of the outcome.',
-          payload: { source: 'GMAIL_CONVERSATION', mode: 'OBSERVE_ONLY' },
+          body: loop.monitoringEnabled
+            ? 'Monitoring schedule updated.'
+            : 'Monitoring enabled. First check scheduled.',
+          payload: {
+            source: 'GMAIL_CONVERSATION',
+            mode: 'OBSERVE_ONLY',
+            nextCheckAt: next.toISOString(),
+          },
         });
         await tx.insert(schema.agentJobs).values({
           userId,
@@ -406,14 +486,7 @@ export function loopService(
           idempotencyKey: `${id}:${generation}:${next.toISOString()}`,
           runAt: next,
         });
-        await tx.insert(loopEvents).values({
-          loopId: id,
-          type: 'agent.check_scheduled',
-          source: 'agent',
-          actor: 'user',
-          body: `Next check scheduled for ${next.toLocaleString('en', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' })} UTC.`,
-          payload: { nextCheckAt: next.toISOString() },
-        });
+        return updated;
       });
     },
     async agentBegin(id: string, generation: number) {
@@ -491,13 +564,15 @@ export function loopService(
             : input.decision === 'STILL_WAITING'
               ? 'WAITING'
               : 'NEEDS_USER';
-        const body = input.userSummary ?? input.rationale;
+        const body = userFacingCopy(input.userSummary ?? input.rationale);
         const type =
           input.decision === 'POSSIBLE_SUCCESS'
             ? 'agent.possible_outcome_detected'
             : input.decision === 'NEEDS_USER' || input.decision === 'UNKNOWN'
               ? 'agent.needs_user'
-              : 'agent.observed';
+              : input.evidenceReferences.length
+                ? 'agent.progress_observed'
+                : 'agent.observed';
         if (input.evidenceReferences.length) {
           const sources = await tx
             .select({ id: schema.externalEvents.id })
@@ -532,6 +607,7 @@ export function loopService(
           },
         });
         let scheduled: Date | null = null;
+        const stopMonitoring = target !== 'WAITING';
         if (target === 'WAITING') {
           scheduled =
             input.nextCheckAt ??
@@ -554,11 +630,13 @@ export function loopService(
               type: 'agent.rescheduled',
               source: 'agent',
               actor: 'Loopend',
-              body: `Still waiting. Loopend will check again ${scheduled.toLocaleDateString('en', { timeZone: 'UTC', month: 'short', day: 'numeric' })}.`,
+              body: 'Still waiting. Loopend will check again.',
               payload: { nextCheckAt: scheduled.toISOString() },
             });
         }
         await minimizeConversationEvidence(tx, loop);
+        if (stopMonitoring)
+          await cancelActiveMonitoringJobs(tx, loop.id, now, job.id);
         await tx
           .update(loops)
           .set({
@@ -566,6 +644,12 @@ export function loopService(
             monitoringNextCheckAt: scheduled,
             monitoringLastCheckAt: now,
             monitoringLastObservation: body,
+            ...(stopMonitoring
+              ? {
+                  monitoringEnabled: false,
+                  monitoringGeneration: loop.monitoringGeneration + 1,
+                }
+              : {}),
             version: loop.version + 1,
             updatedAt: now,
           })

@@ -200,11 +200,15 @@ test('production persistence: durable scans, OAuth replay protection and authent
       candidate.version,
     );
     const loop = (await loopService(db, owner).get(loopId))!.loop;
-    await loopService(db, owner).configureMonitoring(loopId, loop.version, {
-      enabled: 'true',
-      cadenceHours: '24',
-      nextCheckAt: new Date(Date.now() - 60000).toISOString(),
-    });
+    await loopService(db, owner).configureMonitoring(
+      loopId,
+      loop.monitoringGeneration,
+      {
+        enabled: 'true',
+        cadenceHours: '24',
+        nextCheckAt: new Date(Date.now() + 60000).toISOString(),
+      },
+    );
     const [job] = await db
       .select()
       .from(schema.agentJobs)

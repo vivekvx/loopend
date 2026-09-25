@@ -45,7 +45,7 @@ A later successful scan may refresh or withdraw an unreviewed suggestion when it
 
 ## Monitoring
 
-Gmail Loops accepted from Loop Scan retain their source conversation. From the Loop detail page, choose **Enable monitoring**, a cadence of one day, three days, or a week, and an optional first check. An expected date pushes the first automatic check until after that window. Monitoring is **OBSERVE_ONLY**: it reads the one linked Gmail conversation and never sends or modifies mail.
+Gmail Loops accepted from Loop Scan retain their source conversation. From the Loop detail page, choose **Enable monitoring**, a cadence of one day, three days, or a week, and an optional first check. If no first check is chosen, an expected date pushes the first automatic check until after that window. Monitoring is **OBSERVE_ONLY**: it reads the one linked Gmail conversation and never sends or modifies mail.
 
 Loopend records a short observation in the immutable timeline. No new evidence leaves the Loop in WAITING and schedules a later check. Plausible evidence of the outcome moves it to VERIFYING with an inspectable excerpt; only the user can then verify and close it. A disconnected account, ambiguous evidence, or repeated safe failures moves it to NEEDS_USER. Pausing monitoring cancels its future wake-up. Background checks are conservative and do not scan the mailbox.
 
