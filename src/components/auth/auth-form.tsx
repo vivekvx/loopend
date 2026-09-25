@@ -21,12 +21,21 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
           })
         : await authClient.signIn.email({ email, password, rememberMe: true });
       if (result.error) {
+        const code = result.error.code;
         setError(
           result.error.status === 429
             ? 'Too many attempts. Take a moment, then try again.'
-            : signup
-              ? 'We couldn’t create an account with those details. Try signing in, or check your details.'
-              : 'Those details didn’t match. Check your email and password, then try again.',
+            : code === 'PASSWORD_TOO_SHORT'
+              ? 'Use a password with at least 12 characters.'
+              : code === 'PASSWORD_TOO_LONG'
+                ? 'Use a password with no more than 128 characters.'
+                : code === 'INVALID_EMAIL'
+                  ? 'Enter a valid email address.'
+                  : code === 'USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL'
+                    ? 'An account already exists for that email. Try signing in.'
+                    : signup
+                      ? 'We couldn’t create an account with those details. Try signing in, or check your details.'
+                      : 'Those details didn’t match. Check your email and password, then try again.',
         );
         return;
       }

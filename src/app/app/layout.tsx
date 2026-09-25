@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Brand } from '@/components/brand';
 import { requireWorkspace } from '@/server/auth';
+import { SignOut } from '@/components/auth/sign-out';
 export const dynamic = 'force-dynamic';
 export default async function WorkspaceLayout({
   children,
@@ -17,16 +18,19 @@ export default async function WorkspaceLayout({
           <Link href="/app/scan">Loop Scan</Link>
           <Link href="/app/closed">Closed</Link>
         </nav>
-        <Link
-          className="account-link"
-          href="/app/settings"
-          aria-label="Account settings"
-        >
-          Account
-          <span className="avatar" aria-hidden="true">
-            you
-          </span>
-        </Link>
+        <div className="app-header-actions">
+          <Link
+            className="account-link"
+            href="/app/settings"
+            aria-label="Account settings"
+          >
+            Account
+            <span className="avatar" aria-hidden="true">
+              you
+            </span>
+          </Link>
+          <SignOut compact />
+        </div>
       </header>
       {children}
       <footer className="app-footer">

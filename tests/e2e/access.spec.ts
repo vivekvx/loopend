@@ -45,7 +45,10 @@ test('production app requires a real session; sign in and logout revoke access',
     path: `test-results/settings-${info.project.name}.png`,
     fullPage: true,
   });
-  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await page
+    .locator('#main')
+    .getByRole('button', { name: 'Sign out', exact: true })
+    .click();
   await expect(page).toHaveURL(/\/sign-in$/);
   // Replay the old signed cookie: database revocation must still deny access.
   await context.addCookies([cookie!]);

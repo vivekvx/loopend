@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { authClient } from './auth-client';
-export function SignOut() {
+export function SignOut({ compact = false }: { compact?: boolean }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   async function signOut() {
@@ -19,7 +19,7 @@ export function SignOut() {
   return (
     <div>
       <button
-        className="button button-outline"
+        className={`button button-outline${compact ? ' button-small' : ''}`}
         disabled={pending}
         onClick={signOut}
       >
